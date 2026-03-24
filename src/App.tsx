@@ -28,7 +28,7 @@ import {
   EyeOff,
   Mail
 } from 'lucide-react';
-import { Screen, Device, User, FingerprintData, VerificationAction } from './types';
+import { Screen, Device, User, FingerprintData, VerificationAction, PersistedAppState } from './types';
 
 // --- Components ---
 
@@ -1516,27 +1516,26 @@ const INITIAL_USERS = [
   { id: 'user3', name: 'Mike Johnson', email: 'mike@example.com' },
 ];
 
+const INITIAL_FINGERPRINTS: FingerprintData[] = [
+  { id: 'fp1', name: 'Thumb', userId: 'user1', slot: 1 },
+  { id: 'fp2', name: 'Index', userId: 'user1', slot: 2 },
+  { id: 'fp3', name: 'Thumb', userId: 'user2', slot: 1 },
+];
+
+const DEFAULT_STATE: PersistedAppState = {
+  user: { name: INITIAL_USERS[0].name, email: INITIAL_USERS[0].email },
+  usersList: INITIAL_USERS,
+  fingerprints: INITIAL_FINGERPRINTS,
+};
+
+const LOCAL_STATE_KEY = 'grip_app_state';
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('setup');
-  const [user, setUser] = useState<User>(() => {
-    const saved = localStorage.getItem('grip_user');
-    return saved ? JSON.parse(saved) : { name: INITIAL_USERS[0].name, email: INITIAL_USERS[0].email };
-  });
-  const [usersList, setUsersList] = useState(() => {
-    const saved = localStorage.getItem('grip_users_list');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
-  });
-  const [fingerprints, setFingerprints] = useState<FingerprintData[]>(() => {
-    const saved = localStorage.getItem('grip_fingerprints');
-    if (saved) return JSON.parse(saved);
-    
-    // Default fingerprints for demo
-    return [
-      { id: 'fp1', name: 'Thumb', userId: 'user1', slot: 1 },
-      { id: 'fp2', name: 'Index', userId: 'user1', slot: 2 },
-      { id: 'fp3', name: 'Thumb', userId: 'user2', slot: 1 },
-    ];
-  });
+  const [user, setUser] = useState<User>(DEFAULT_STATE.user);
+  const [usersList, setUsersList] = useState(DEFAULT_STATE.usersList);
+  const [fingerprints, setFingerprints] = useState<FingerprintData[]>(DEFAULT_STATE.fingerprints);
+  const [hasHydratedState, setHasHydratedState] = useState(false);
   const [editingFingerprintId, setEditingFingerprintId] = useState<string | null>(null);
   const [targetUserId, setTargetUserId] = useState<string | null>(null);
   const [targetSlot, setTargetSlot] = useState<number | null>(null);
@@ -1544,20 +1543,60 @@ export default function App() {
   const [verificationAction, setVerificationAction] = useState<{ type: VerificationAction; data?: any } | null>(null);
 
   useEffect(() => {
-    // No auto-redirect on mount to ensure we always start at "Connect" screen
+    // Load device-local cache first, then backend state as source of truth.
+    const loadState = async () => {
+      const cached = localStorage.getItem(LOCAL_STATE_KEY);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as PersistedAppState;
+          setUser(parsed.user ?? DEFAULT_STATE.user);
+          setUsersList(Array.isArray(parsed.usersList) ? parsed.usersList : DEFAULT_STATE.usersList);
+          setFingerprints(Array.isArray(parsed.fingerprints) ? parsed.fingerprints : DEFAULT_STATE.fingerprints);
+        } catch (error) {
+          console.error('Failed to parse local state cache:', error);
+        }
+      }
+
+      try {
+        const response = await fetch('/api/state');
+        if (response.ok) {
+          const remote = (await response.json()) as PersistedAppState;
+          setUser(remote.user ?? DEFAULT_STATE.user);
+          setUsersList(Array.isArray(remote.usersList) ? remote.usersList : DEFAULT_STATE.usersList);
+          setFingerprints(Array.isArray(remote.fingerprints) ? remote.fingerprints : DEFAULT_STATE.fingerprints);
+        }
+      } catch (error) {
+        console.error('Failed to load backend state:', error);
+      } finally {
+        setHasHydratedState(true);
+      }
+    };
+
+    loadState();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('grip_user', JSON.stringify(user));
-  }, [user]);
+    if (!hasHydratedState) return;
 
-  useEffect(() => {
-    localStorage.setItem('grip_users_list', JSON.stringify(usersList));
-  }, [usersList]);
+    const state: PersistedAppState = { user, usersList, fingerprints };
+    localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
 
-  useEffect(() => {
-    localStorage.setItem('grip_fingerprints', JSON.stringify(fingerprints));
-  }, [fingerprints]);
+    const timeout = setTimeout(async () => {
+      try {
+        await fetch('/api/state', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(state)
+        });
+      } catch (error) {
+        console.error('Failed to sync state to backend:', error);
+      }
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [hasHydratedState, user, usersList, fingerprints]);
 
   const navigate = (screen: Screen) => setCurrentScreen(screen);
 
@@ -1765,9 +1804,7 @@ export default function App() {
     setTargetUserId(null);
     setTargetSlot(null);
     setUserFingerprintsBackScreen('dashboard');
-    localStorage.removeItem('grip_user');
-    localStorage.removeItem('grip_fingerprints');
-    localStorage.removeItem('grip_users_list');
+    localStorage.removeItem(LOCAL_STATE_KEY);
     navigate('setup');
   };
 

@@ -47,3 +47,9 @@ export interface FingerprintData {
   userId: string;
   slot: number;
 }
+
+export interface PersistedAppState {
+  user: User;
+  usersList: Array<{ id: string; name: string; email: string }>;
+  fingerprints: FingerprintData[];
+}
