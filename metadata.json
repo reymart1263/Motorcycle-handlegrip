@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Motoridad",
+  "description": "A modern security app for smart bike locks and trackers featuring Bluetooth pairing, hotspot connection, and advanced device management.",
+  "requestFramePermissions": []
+}
