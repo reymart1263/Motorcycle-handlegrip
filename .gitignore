@@ -1,4 +1,9 @@
 node_modules/
+mobile/node_modules/
+mobile/.expo/
+mobile/.expo-shared/
+mobile/android/
+mobile/ios/
 build/
 dist/
 coverage/

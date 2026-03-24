@@ -27,3 +27,29 @@ View your app in AI Studio: https://ai.studio/apps/f2ff5931-5801-45cb-a5df-2c2d3
   - `PUT /api/state` - save app data
 - Local backend database file: `data/app-state.json`
 - Device-local cache key (for mobile-like offline persistence): `grip_app_state` in local storage.
+
+## True Mobile App (Expo React Native)
+
+A native mobile app is available under `mobile/`.
+
+### Mobile features
+
+- Native UI with React Native (Android/iOS)
+- On-device persistence with `AsyncStorage`
+- Backend sync using existing API (`GET/PUT /api/state`)
+
+### Run mobile app
+
+1. Run backend in project root:
+   `npm run dev`
+2. In another terminal, install mobile dependencies:
+   `cd mobile && npm install`
+3. Start Expo:
+   `npm run start`
+4. Open in Android/iOS emulator or Expo Go.
+
+### Backend URL for mobile
+
+- Default is Android emulator URL: `http://10.0.2.2:3000`
+- Override with env var in `mobile/.env`:
+  `EXPO_PUBLIC_API_BASE_URL=http://<your-local-ip>:3000`
