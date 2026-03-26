@@ -53,3 +53,13 @@ A native mobile app is available under `mobile/`.
 - Default is Android emulator URL: `http://10.0.2.2:3000`
 - Override with env var in `mobile/.env`:
   `EXPO_PUBLIC_API_BASE_URL=http://<your-local-ip>:3000`
+
+## Native Android (Kotlin / Android Studio)
+
+For **full native control** (no React Native), use the Gradle project in `native-android/`:
+
+- **Language:** Kotlin (recommended for Android today; Java is optional for new modules).
+- **UI:** Jetpack Compose.
+- **Docs:** see [native-android/README.md](native-android/README.md).
+
+Open `native-android` in **Android Studio**, run the backend with `npm run dev`, then Run the app on an emulator or device.

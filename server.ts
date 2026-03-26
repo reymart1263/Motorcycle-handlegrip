@@ -1,4 +1,6 @@
 import express from "express";
+import http from "http";
+import net from "net";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -62,9 +64,27 @@ async function writeState(state: AppState): Promise<void> {
   await fs.writeFile(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
 }
 
+/** Try binding ports starting at `startPort` until one is free (avoids EADDRINUSE crashes). */
+async function findAvailablePort(startPort: number, maxAttempts = 40): Promise<number> {
+  for (let p = startPort; p < startPort + maxAttempts; p++) {
+    const canBind = await new Promise<boolean>((resolve) => {
+      const probe = net
+        .createServer()
+        .once("error", () => resolve(false))
+        .once("listening", () => {
+          probe.close(() => resolve(true));
+        })
+        .listen(p, "0.0.0.0");
+    });
+    if (canBind) return p;
+    console.warn(`[server] Port ${p} is already in use, trying ${p + 1}...`);
+  }
+  throw new Error(`No free port found between ${startPort} and ${startPort + maxAttempts - 1}`);
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const preferredPort = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
@@ -105,10 +125,20 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
+  const httpServer = http.createServer(app);
+
+  // Vite middleware for development — attach HMR to the same HTTP server so we do not
+  // bind a second WebSocket port (e.g. 24678), which conflicts when another dev server runs.
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer },
+        watch: {
+          // Backend DB writes should not trigger frontend reload loops.
+          ignored: ["**/data/**"],
+        },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -120,9 +150,23 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  const port = await findAvailablePort(preferredPort);
+  httpServer.listen(port, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${port}`);
+    if (port !== preferredPort) {
+      console.warn(
+        `[server] Using port ${port} because ${preferredPort} was busy. Update mobile/API URL if needed.`,
+      );
+    }
+  });
+
+  httpServer.on("error", (err) => {
+    console.error("[server] HTTP server error:", err);
+    process.exit(1);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("[server] Failed to start:", err);
+  process.exit(1);
+});
