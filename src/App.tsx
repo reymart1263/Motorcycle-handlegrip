@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Shield, 
   Bike, 
   Wifi, 
-  Bluetooth, 
+  Bluetooth as BluetoothIcon, 
   Lock, 
   ChevronRight, 
   ArrowLeft, 
@@ -630,35 +630,157 @@ const VerifyPasswordScreen = ({
 };
 
 const BluetoothScreen = ({ onBack, onNext }: { onBack: () => void; onNext: () => void }) => {
-  const [isBluetoothOn, setIsBluetoothOn] = useState(true);
-  const [searching, setSearching] = useState(true);
+  const [hasWebBluetooth, setHasWebBluetooth] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [devices, setDevices] = useState<Array<{ id: string; name: string | null }>>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const scanCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (isBluetoothOn) {
-      setSearching(true);
-      const timer = setTimeout(() => setSearching(false), 3000);
-      return () => clearTimeout(timer);
-    } else {
-      setSearching(false);
+    setHasWebBluetooth(typeof navigator !== 'undefined' && 'bluetooth' in navigator && !!navigator.bluetooth);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      scanCleanupRef.current?.();
+      scanCleanupRef.current = null;
+    };
+  }, []);
+
+  const chooseDevice = async () => {
+    if (!navigator.bluetooth) return;
+    setError(null);
+    scanCleanupRef.current?.();
+    scanCleanupRef.current = null;
+    try {
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [],
+      });
+      setDevices([{ id: device.id, name: device.name ?? null }]);
+      setSelectedId(device.id);
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === 'NotFoundError') return;
+      setError(err.message || 'Could not open Bluetooth device picker.');
     }
-  }, [isBluetoothOn]);
+  };
+
+  const startLiveScan = async () => {
+    if (!navigator.bluetooth) return;
+    setError(null);
+    setDevices([]);
+    setSelectedId(null);
+    scanCleanupRef.current?.();
+    scanCleanupRef.current = null;
+
+    const nav = navigator.bluetooth as Bluetooth & {
+      requestLEScan?: (options: { acceptAllAdvertisements?: boolean }) => Promise<{ stop: () => void; active: boolean }>;
+    };
+
+    if (typeof nav.requestLEScan !== 'function') {
+      setError('Live BLE scanning is not supported in this browser. Use “Search with system picker” or the native mobile app for full scanning.');
+      return;
+    }
+
+    try {
+      const scan = await nav.requestLEScan({ acceptAllAdvertisements: true });
+      const seen = new Map<string, { id: string; name: string | null }>();
+
+      const onAdv = (event: Event) => {
+        const ev = event as { device?: BluetoothDevice };
+        const d = ev.device;
+        if (!d) return;
+        seen.set(d.id, { id: d.id, name: d.name ?? null });
+        setDevices(Array.from(seen.values()));
+      };
+
+      navigator.bluetooth.addEventListener('advertisementreceived', onAdv);
+      setScanning(true);
+
+      scanCleanupRef.current = () => {
+        navigator.bluetooth?.removeEventListener('advertisementreceived', onAdv);
+        scan.stop();
+        setScanning(false);
+      };
+    } catch (e) {
+      const err = e as Error;
+      setError(err.message || 'BLE scan failed. Try the system picker instead.');
+    }
+  };
+
+  const stopLiveScan = () => {
+    scanCleanupRef.current?.();
+    scanCleanupRef.current = null;
+    setScanning(false);
+  };
 
   return (
     <div className="flex-1 flex flex-col">
       <Header title="Bluetooth Pairing" onBack={onBack} />
-      <div className="px-6 flex-1">
-        <div className="flex items-center justify-between p-6 bg-zinc-50 rounded-3xl mb-8">
+      <div className="px-6 flex-1 flex flex-col pb-8">
+        {!hasWebBluetooth && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-100 rounded-2xl text-xs text-amber-900 leading-relaxed">
+            Web Bluetooth is not available here. Use <span className="font-bold">Chrome or Edge</span> on desktop or Android, served over <span className="font-bold">https</span> or <span className="font-bold">localhost</span>. For continuous BLE scanning, use the native mobile app.
+          </div>
+        )}
+
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-100 rounded-2xl text-xs text-red-800">
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between p-6 bg-zinc-50 rounded-3xl mb-6">
           <div className="flex items-center gap-4">
-            <Bluetooth size={24} className={isBluetoothOn ? 'text-blue-500' : 'text-zinc-400'} />
+            <BluetoothIcon size={24} className={hasWebBluetooth ? 'text-blue-500' : 'text-zinc-400'} />
             <span className="font-medium">Bluetooth</span>
           </div>
-          <Toggle enabled={isBluetoothOn} onChange={setIsBluetoothOn} />
+          <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+            {hasWebBluetooth ? 'Ready' : 'Unavailable'}
+          </span>
         </div>
 
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="relative mb-8">
+        <div className="space-y-3 mb-6">
+          <button
+            type="button"
+            disabled={!hasWebBluetooth}
+            onClick={chooseDevice}
+            className="w-full py-4 bg-black text-white font-bold rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Search with system picker
+          </button>
+          <p className="text-[11px] text-zinc-500 text-center px-2">
+            Opens the browser/OS Bluetooth chooser — these are real devices the system can see.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={!hasWebBluetooth}
+              onClick={startLiveScan}
+              className="flex-1 py-3 bg-zinc-100 text-zinc-900 font-bold rounded-xl text-sm disabled:opacity-40"
+            >
+              Scan nearby (BLE)
+            </button>
+            <button
+              type="button"
+              disabled={!scanning}
+              onClick={stopLiveScan}
+              className="flex-1 py-3 bg-zinc-900 text-white font-bold rounded-xl text-sm disabled:opacity-40"
+            >
+              Stop scan
+            </button>
+          </div>
+          <p className="text-[11px] text-zinc-500 text-center px-2">
+            Live BLE scan works only in browsers that support <span className="font-mono">requestLEScan</span> (often Chrome on Android). iOS Safari does not support Web Bluetooth.
+          </p>
+        </div>
+
+        <div className="flex flex-col items-center justify-center py-4 min-h-[120px]">
+          <div className="relative mb-6">
             <Smartphone size={64} className="text-zinc-200" />
-            {isBluetoothOn && searching && (
+            {scanning && (
               <>
                 <motion.div 
                   animate={{ scale: [1, 2], opacity: [1, 0] }}
@@ -673,29 +795,46 @@ const BluetoothScreen = ({ onBack, onNext }: { onBack: () => void; onNext: () =>
               </>
             )}
           </div>
-          <p className="text-zinc-500">
-            {isBluetoothOn ? (searching ? "Searching for devices..." : "Devices found") : "Turn on Bluetooth to search"}
+          <p className="text-zinc-500 text-sm text-center">
+            {scanning ? 'Scanning for BLE advertisements…' : devices.length ? `${devices.length} device(s) seen` : 'Search for a device to continue'}
           </p>
         </div>
 
-        {isBluetoothOn && !searching && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-            <div className="flex items-center justify-between p-5 bg-white border border-zinc-100 rounded-2xl shadow-sm">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-zinc-100 rounded-full flex items-center justify-center">
-                  <Bike size={20} />
+        {devices.length > 0 && (
+          <div className="space-y-2 mb-6 max-h-48 overflow-y-auto">
+            {devices.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => setSelectedId(d.id)}
+                className={`w-full flex items-center justify-between p-4 rounded-2xl border text-left transition-colors ${
+                  selectedId === d.id ? 'border-black bg-zinc-50' : 'border-zinc-100 bg-white'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-zinc-100 rounded-full flex items-center justify-center">
+                    <Bike size={20} />
+                  </div>
+                  <div>
+                    <p className="font-semibold">{d.name || '(No name)'}</p>
+                    <p className="text-[10px] text-zinc-400 font-mono truncate max-w-[220px]">{d.id}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-semibold">Grip-1256</p>
-                  <p className="text-xs text-zinc-400">Smart Bike Lock</p>
-                </div>
-              </div>
-              <button onClick={onNext} className="px-4 py-2 bg-black text-white text-sm font-bold rounded-xl">
-                Connect
               </button>
-            </div>
-          </motion.div>
+            ))}
+          </div>
         )}
+
+        <div className="mt-auto space-y-3">
+          <button
+            type="button"
+            disabled={!selectedId}
+            onClick={onNext}
+            className="w-full py-4 bg-black text-white font-bold rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Continue
+          </button>
+        </div>
       </div>
     </div>
   );

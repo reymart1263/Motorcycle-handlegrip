@@ -1,4 +1,15 @@
 node_modules/
+mobile/node_modules/
+mobile/.expo/
+mobile/.expo-shared/
+mobile/android/
+mobile/ios/
+native-android/.gradle/
+native-android/build/
+native-android/app/build/
+native-android/.idea/
+native-android/local.properties
+native-android/*.iml
 build/
 dist/
 coverage/
