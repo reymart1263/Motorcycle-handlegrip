@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -11,10 +10,12 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ApiState, FingerprintData, Screen, User } from "./src/types";
 import { fetchRemoteState, pushRemoteState } from "./src/api";
 import { BluetoothPairingScreen } from "./src/BluetoothPairingScreen";
+import { HotspotScreen } from "./src/HotspotScreen";
 
 const STORAGE_KEY = "grip_mobile_app_state";
 
@@ -32,7 +33,7 @@ const INITIAL_FINGERPRINTS: FingerprintData[] = [
 
 const DEFAULT_USER: User = { name: INITIAL_USERS[0].name, email: INITIAL_USERS[0].email };
 
-export default function App() {
+function MainApp() {
   const [screen, setScreen] = useState<Screen>("setup");
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User>(DEFAULT_USER);
@@ -115,7 +116,7 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      <ScrollView contentContainerStyle={styles.content}>
+      <View style={styles.content}>
         {screen === "setup" && (
           <>
             <Text style={styles.title}>Connect</Text>
@@ -132,15 +133,10 @@ export default function App() {
         )}
 
         {screen === "hotspot" && (
-          <>
-            <Header title="Hotspot Connection" />
-            <Text style={styles.subtitle}>Connect to hotspot so the device can sync telemetry.</Text>
-            <PrimaryButton
-              label={user.password ? "Verify Fingerprint" : "Register Fingerprint"}
-              onPress={() => setScreen(user.password ? "fingerprintVerification" : "fingerprintRegistration")}
-            />
-            <GhostButton label="Back" onPress={() => setScreen("bluetooth")} />
-          </>
+          <HotspotScreen
+            onBack={() => setScreen("bluetooth")}
+            onNext={() => setScreen(user.password ? "fingerprintVerification" : "fingerprintRegistration")}
+          />
         )}
 
         {screen === "fingerprintRegistration" && (
@@ -257,7 +253,7 @@ export default function App() {
             />
           </>
         )}
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -293,7 +289,7 @@ function GhostButton({ label, onPress }: { label: string; onPress: () => void })
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#ffffff" },
-  content: { padding: 20, gap: 14 },
+  content: { flex: 1, padding: 20, gap: 14 },
   centered: { flex: 1, justifyContent: "center", alignItems: "center", gap: 12, backgroundColor: "#fff" },
   title: { fontSize: 34, fontWeight: "700", color: "#000" },
   header: { fontSize: 28, fontWeight: "700", color: "#000", marginBottom: 8 },
@@ -333,3 +329,11 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 12, color: "#666", marginBottom: 4, fontWeight: "600" },
   cardValue: { fontSize: 16, color: "#111", fontWeight: "700" },
 });
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <MainApp />
+    </SafeAreaProvider>
+  );
+}

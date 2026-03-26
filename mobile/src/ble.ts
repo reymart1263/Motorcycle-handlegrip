@@ -1,10 +1,17 @@
-import { Platform, PermissionsAndroid } from "react-native";
+import { NativeModules, Platform, PermissionsAndroid } from "react-native";
 import { BleManager, Device, State } from "react-native-ble-plx";
 
 let manager: BleManager | null = null;
 
-export function getBleManager(): BleManager {
-  if (!manager) manager = new BleManager();
+export function getBleManager(): BleManager | null {
+  if (!manager) {
+    try {
+      manager = new BleManager();
+    } catch (err) {
+      console.warn("BleManager not available: Native module is null. Are you using Expo Go?");
+      return null;
+    }
+  }
   return manager;
 }
 
@@ -35,7 +42,9 @@ export async function ensureBlePermissions(): Promise<boolean> {
 }
 
 export async function getBluetoothState(): Promise<State> {
-  return getBleManager().state();
+  const m = getBleManager();
+  if (!m) return "Unknown" as State;
+  return m.state();
 }
 
 export function deviceToRow(device: Device): ScannedBleDevice {
@@ -52,6 +61,10 @@ export function startBleScan(
   onError?: (message: string) => void,
 ): void {
   const m = getBleManager();
+  if (!m) {
+    onError?.("BLE is not supported on this device/environment (e.g. Expo Go). Use a Dev Client or physical device.");
+    return;
+  }
   m.startDeviceScan(null, { allowDuplicates: true }, (error, device) => {
     if (error) {
       onError?.(error.message);
@@ -64,5 +77,5 @@ export function startBleScan(
 }
 
 export function stopBleScan(): void {
-  getBleManager().stopDeviceScan();
+  getBleManager()?.stopDeviceScan();
 }

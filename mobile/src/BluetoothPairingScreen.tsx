@@ -8,7 +8,9 @@ import {
   StyleSheet,
   Text,
   View,
+  Switch,
 } from "react-native";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import type { State as BleAdapterState } from "react-native-ble-plx";
 import {
   ensureBlePermissions,
@@ -29,7 +31,6 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<Map<string, ScannedBleDevice>>(new Map());
   const [error, setError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const refreshAdapterState = useCallback(async () => {
     try {
@@ -43,6 +44,7 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
   useEffect(() => {
     refreshAdapterState();
     const mgr = getBleManager();
+    if (!mgr) return;
     const subscription = mgr.onStateChange((state: BleAdapterState) => {
       setAdapterState(state);
     }, true);
@@ -52,13 +54,11 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
   }, [refreshAdapterState]);
 
   const sortedDevices = useMemo(() => {
-    return Array.from(devices.values()).sort((a, b) => {
-      const an = a.name ?? "";
-      const bn = b.name ?? "";
-      if (an && !bn) return -1;
-      if (!an && bn) return 1;
-      return (b.rssi ?? -999) - (a.rssi ?? -999);
-    });
+    return Array.from(devices.values())
+      .filter((device) => device.name && device.name.trim().length > 0)
+      .sort((a, b) => {
+        return (b.rssi ?? -999) - (a.rssi ?? -999);
+      });
   }, [devices]);
 
   const handleStartScan = async () => {
@@ -97,28 +97,47 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
     setScanning(false);
   };
 
+  const toggleScanning = (val: boolean) => {
+    if (val) {
+      handleStartScan();
+    } else {
+      handleStopScan();
+    }
+  };
+
   useEffect(() => {
     return () => {
       stopBleScan();
     };
   }, []);
 
-  const btReady = adapterState === "PoweredOn";
-
   return (
     <View style={styles.wrap}>
-      <Text style={styles.title}>Bluetooth Pairing</Text>
-      <Text style={styles.hint}>
-        {Platform.OS === "ios"
-          ? "Uses Bluetooth LE to discover nearby devices. Use a physical iPhone (simulator has no Bluetooth)."
-          : "Uses Bluetooth LE to discover nearby devices. Turn Bluetooth on and grant permissions when asked."}
-      </Text>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable onPress={onBack} hitSlop={10} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#111" />
+        </Pressable>
+        <Text style={styles.title}>Bluetooth Pairing</Text>
+      </View>
 
-      {adapterState && (
-        <Text style={styles.status}>
-          Adapter: <Text style={styles.statusBold}>{adapterState}</Text>
-        </Text>
-      )}
+      {/* Main Bluetooth Toggle */}
+      <View style={styles.toggleCard}>
+        <View style={styles.toggleLeft}>
+          <Ionicons name="bluetooth" size={20} color="#3b82f6" />
+          <Text style={styles.toggleText}>Bluetooth</Text>
+        </View>
+        <View style={styles.toggleRight}>
+          {scanning && <ActivityIndicator size="small" color="#000" style={styles.loader} />}
+          <Switch
+            value={scanning}
+            onValueChange={toggleScanning}
+            trackColor={{ false: "#e4e4e7", true: "#000" }}
+            thumbColor="#fff"
+            ios_backgroundColor="#e4e4e7"
+          />
+        </View>
+      </View>
 
       {error && (
         <View style={styles.errorBox}>
@@ -126,115 +145,178 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
         </View>
       )}
 
-      <View style={styles.row}>
-        {!scanning ? (
-          <Pressable
-            style={[styles.primary, !btReady && styles.disabled]}
-            onPress={handleStartScan}
-            disabled={!btReady}
-          >
-            <Text style={styles.primaryText}>Search for devices</Text>
-          </Pressable>
-        ) : (
-          <Pressable style={styles.primary} onPress={handleStopScan}>
-            <Text style={styles.primaryText}>Stop search</Text>
-          </Pressable>
-        )}
+      {/* Decorative Center */}
+      <View style={styles.centerGraphic}>
+        <Ionicons name="phone-portrait-outline" size={64} color="#d4d4d8" />
+        <Text style={styles.centerGraphicText}>Devices found</Text>
       </View>
 
-      {scanning && (
-        <View style={styles.scanningRow}>
-          <ActivityIndicator />
-          <Text style={styles.scanningText}>Scanning for BLE devices…</Text>
-        </View>
-      )}
-
-      <Text style={styles.listTitle}>Nearby devices ({sortedDevices.length})</Text>
+      {/* Device List */}
       <FlatList
         data={sortedDevices}
         keyExtractor={(item) => item.id}
         style={styles.list}
+        showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          <Text style={styles.empty}>
-            {scanning ? "Listening… move devices closer or wake them up." : "Tap Search to scan."}
-          </Text>
+          !scanning ? (
+            <Text style={styles.emptyText}>Toggle Bluetooth on to start scanning.</Text>
+          ) : (
+            <Text style={styles.emptyText}>Scanning for nearby devices...</Text>
+          )
         }
         renderItem={({ item }) => (
-          <Pressable
-            style={[styles.deviceRow, selectedId === item.id && styles.deviceRowSelected]}
-            onPress={() => setSelectedId(item.id)}
-          >
-            <Text style={styles.deviceName}>{item.name ?? "(No name)"}</Text>
-            <Text style={styles.deviceMeta}>
-              {item.id} · RSSI {item.rssi ?? "—"}
-            </Text>
-          </Pressable>
+          <View style={styles.deviceRow}>
+            <View style={styles.deviceRowLeft}>
+              <View style={styles.deviceIconWrap}>
+                <MaterialCommunityIcons name="bike" size={20} color="#111" />
+              </View>
+              <View style={styles.deviceInfo}>
+                <Text style={styles.deviceName}>{item.name}</Text>
+                <Text style={styles.deviceSubtitle}>Smart Bike Lock</Text>
+              </View>
+            </View>
+            <Pressable style={styles.connectButton} onPress={onNext}>
+              <Text style={styles.connectButtonText}>Connect</Text>
+            </Pressable>
+          </View>
         )}
       />
-
-      <Pressable
-        style={[styles.primary, (!selectedId || scanning) && styles.disabled]}
-        onPress={() => {
-          if (selectedId) onNext();
-        }}
-        disabled={!selectedId || scanning}
-      >
-        <Text style={styles.primaryText}>Continue with selected device</Text>
-      </Pressable>
-
-      <Pressable style={styles.ghost} onPress={onBack}>
-        <Text style={styles.ghostText}>Back</Text>
-      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: 10 },
-  title: { fontSize: 22, fontWeight: "700", color: "#000" },
-  hint: { fontSize: 13, color: "#666", marginBottom: 4 },
-  status: { fontSize: 12, color: "#666" },
-  statusBold: { fontWeight: "700", color: "#111" },
+  wrap: { 
+    flex: 1,
+    backgroundColor: "#ffffff"
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 24,
+    marginTop: 8,
+  },
+  backButton: {
+    marginRight: 16,
+  },
+  title: { 
+    fontSize: 22, 
+    fontWeight: "700", 
+    color: "#111" 
+  },
+  toggleCard: {
+    backgroundColor: "#f4f4f5",
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  toggleLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  toggleText: {
+    fontSize: 16,
+    color: "#111",
+    fontWeight: "500",
+  },
+  toggleRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  loader: {
+    marginRight: 4,
+  },
   errorBox: {
     backgroundColor: "#fef2f2",
-    borderRadius: 10,
-    padding: 10,
+    borderRadius: 12,
+    padding: 12,
     borderWidth: 1,
     borderColor: "#fecaca",
+    marginTop: 16,
   },
-  errorText: { color: "#b91c1c", fontSize: 13 },
-  row: { marginTop: 4 },
-  primary: {
-    backgroundColor: "#000",
-    borderRadius: 12,
-    paddingVertical: 14,
+  errorText: { 
+    color: "#b91c1c", 
+    fontSize: 13 
+  },
+  centerGraphic: {
     alignItems: "center",
+    justifyContent: "center",
+    marginTop: 60,
+    marginBottom: 40,
   },
-  primaryText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-  disabled: { opacity: 0.45 },
-  scanningRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  scanningText: { fontSize: 13, color: "#444" },
-  listTitle: { fontSize: 13, fontWeight: "600", color: "#333", marginTop: 8 },
-  list: { maxHeight: 220 },
-  empty: { color: "#999", fontSize: 13, paddingVertical: 12 },
+  centerGraphicText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#71717a",
+    fontWeight: "400",
+  },
+  list: { 
+    flex: 1,
+  },
+  emptyText: {
+    textAlign: "center",
+    color: "#a1a1aa",
+    fontSize: 14,
+    marginTop: 20,
+  },
   deviceRow: {
+    backgroundColor: "#ffffff",
     borderWidth: 1,
-    borderColor: "#eee",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    backgroundColor: "#fafafa",
-  },
-  deviceRowSelected: { borderColor: "#000", backgroundColor: "#f4f4f5" },
-  deviceName: { fontWeight: "700", fontSize: 15, color: "#111" },
-  deviceMeta: { fontSize: 11, color: "#666", marginTop: 4 },
-  ghost: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderColor: "#f4f4f5",
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: "row",
     alignItems: "center",
-    marginTop: 4,
+    justifyContent: "space-between",
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  ghostText: { color: "#111", fontWeight: "600", fontSize: 15 },
+  deviceRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  deviceIconWrap: {
+    backgroundColor: "#f4f4f5",
+    borderRadius: 40,
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deviceInfo: {
+    justifyContent: "center",
+  },
+  deviceName: { 
+    fontWeight: "700", 
+    fontSize: 15, 
+    color: "#111",
+    marginBottom: 2,
+  },
+  deviceSubtitle: { 
+    fontSize: 12, 
+    color: "#a1a1aa",
+    fontWeight: "500",
+  },
+  connectButton: {
+    backgroundColor: "#000",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  connectButtonText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
 });
+

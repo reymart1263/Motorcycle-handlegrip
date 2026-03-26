@@ -1233,7 +1233,6 @@ const DashboardScreen = ({
   onLogout: () => void;
   onManageUserFingerprints: (userId: string) => void;
 }) => {
-  const [isArmed, setIsArmed] = useState(true);
 
   return (
     <div className="flex-1 flex flex-col">
@@ -1248,24 +1247,6 @@ const DashboardScreen = ({
       </div>
 
       <div className="px-6 flex-1 overflow-y-auto pb-12">
-        {/* Device Status */}
-        <div className="bg-black text-white p-8 rounded-[40px] mb-8 relative overflow-hidden">
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-              <p className="text-zinc-400 text-sm font-medium">Device Status</p>
-            </div>
-            <h3 className="text-2xl font-bold mb-8">Grip-1256 Connected</h3>
-            <button 
-              onClick={() => setIsArmed(!isArmed)}
-              className={`w-full py-4 rounded-2xl font-bold transition-colors ${isArmed ? 'bg-white text-black' : 'bg-emerald-500 text-white'}`}
-            >
-              {isArmed ? 'Disarm' : 'Arm Device'}
-            </button>
-          </div>
-          <Shield size={120} className="absolute -bottom-10 -right-10 text-white/10" />
-        </div>
-
         {/* Location */}
         <div className="bg-zinc-50 p-6 rounded-3xl mb-8">
           <div className="flex items-center justify-between mb-4">

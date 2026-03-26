@@ -1,7 +1,8 @@
 {
   "user": {
     "name": "John Doe",
-    "email": "john@example.com"
+    "email": "custodw@mailc",
+    "password": "Reym@rt1263"
   },
   "usersList": [
     {
@@ -20,24 +21,5 @@
       "email": "mike@example.com"
     }
   ],
-  "fingerprints": [
-    {
-      "id": "fp1",
-      "name": "Thumb",
-      "userId": "user1",
-      "slot": 1
-    },
-    {
-      "id": "fp2",
-      "name": "Index",
-      "userId": "user1",
-      "slot": 2
-    },
-    {
-      "id": "fp3",
-      "name": "Thumb",
-      "userId": "user2",
-      "slot": 1
-    }
-  ]
+  "fingerprints": []
 }
