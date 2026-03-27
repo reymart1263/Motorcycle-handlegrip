@@ -19,11 +19,12 @@ import {
   ScannedBleDevice,
   startBleScan,
   stopBleScan,
+  connectToDevice,
 } from "./ble";
 
 type Props = {
   onBack: () => void;
-  onNext: () => void;
+  onNext: (deviceId: string) => void;
 };
 
 export function BluetoothPairingScreen({ onBack, onNext }: Props) {
@@ -105,6 +106,16 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
     }
   };
 
+  const handleConnect = async (deviceId: string) => {
+    handleStopScan();
+    const success = await connectToDevice(deviceId);
+    if (success) {
+      onNext(deviceId);
+    } else {
+      Alert.alert("Connection Failed", "Could not connect to the device. Please try again.");
+    }
+  };
+
   useEffect(() => {
     return () => {
       stopBleScan();
@@ -175,7 +186,7 @@ export function BluetoothPairingScreen({ onBack, onNext }: Props) {
                 <Text style={styles.deviceSubtitle}>Smart Bike Lock</Text>
               </View>
             </View>
-            <Pressable style={styles.connectButton} onPress={onNext}>
+            <Pressable style={styles.connectButton} onPress={() => handleConnect(item.id)}>
               <Text style={styles.connectButtonText}>Connect</Text>
             </Pressable>
           </View>

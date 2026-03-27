@@ -16,6 +16,13 @@ import { ApiState, FingerprintData, Screen, User } from "./src/types";
 import { fetchRemoteState, pushRemoteState } from "./src/api";
 import { BluetoothPairingScreen } from "./src/BluetoothPairingScreen";
 import { HotspotScreen } from "./src/HotspotScreen";
+import { SetupScreen } from "./src/SetupScreen";
+import { VerificationScreen } from "./src/VerificationScreen";
+import { PasswordCreationScreen } from "./src/PasswordCreationScreen";
+import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
+import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
+import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
+import { DashboardScreen } from "./src/DashboardScreen";
 
 const STORAGE_KEY = "grip_mobile_app_state";
 
@@ -42,6 +49,7 @@ function MainApp() {
   const [passwordDraft, setPasswordDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
   const [nameDraft, setNameDraft] = useState("");
+  const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null);
 
   useEffect(() => {
     const hydrate = async () => {
@@ -118,140 +126,95 @@ function MainApp() {
       <StatusBar barStyle="dark-content" />
       <View style={styles.content}>
         {screen === "setup" && (
-          <>
-            <Text style={styles.title}>Connect</Text>
-            <Text style={styles.subtitle}>Secure your ride, your way.</Text>
-            <PrimaryButton label="Start Setup" onPress={() => setScreen("bluetooth")} />
-          </>
+          <SetupScreen onNext={() => setScreen("bluetooth")} />
         )}
 
         {screen === "bluetooth" && (
           <BluetoothPairingScreen
             onBack={() => setScreen("setup")}
-            onNext={() => setScreen("hotspot")}
+            onNext={(deviceId) => {
+              setConnectedDeviceId(deviceId);
+              setScreen("hotspot");
+            }}
           />
         )}
 
         {screen === "hotspot" && (
           <HotspotScreen
+            deviceId={connectedDeviceId}
             onBack={() => setScreen("bluetooth")}
             onNext={() => setScreen(user.password ? "fingerprintVerification" : "fingerprintRegistration")}
           />
         )}
 
         {screen === "fingerprintRegistration" && (
-          <>
-            <Header title="Fingerprint Registration" />
-            <Text style={styles.subtitle}>Register a fingerprint using the handlegrip sensor.</Text>
-            <PrimaryButton label="Simulate Registration" onPress={registerFingerprint} />
-            <GhostButton label="Skip" onPress={() => setScreen("passwordCreation")} />
-          </>
+          <FingerprintRegistrationScreen
+            deviceId={connectedDeviceId}
+            onBack={() => setScreen("setup")}
+            onSkip={() => setScreen("passwordCreation")}
+            onRegister={registerFingerprint}
+          />
         )}
 
         {screen === "fingerprintNaming" && (
-          <>
-            <Header title="Name Fingerprint" />
-            <TextInput
-              placeholder="e.g. Right Thumb"
-              style={styles.input}
-              value={nameDraft}
-              onChangeText={setNameDraft}
-            />
-            <PrimaryButton
-              label="Save Name"
-              onPress={() => {
-                if (!nameDraft.trim()) {
-                  setScreen("passwordCreation");
-                  return;
-                }
-                setFingerprints((prev) => {
-                  const copy = [...prev];
-                  const target = copy[copy.length - 1];
-                  copy[copy.length - 1] = { ...target, name: nameDraft.trim() };
-                  return copy;
-                });
-                setNameDraft("");
+          <FingerprintNamingScreen
+            onBack={() => setScreen("fingerprintRegistration")}
+            onSave={(nameDraft) => {
+              if (!nameDraft.trim()) {
                 setScreen("passwordCreation");
-              }}
-            />
-          </>
+                return;
+              }
+              setFingerprints((prev) => {
+                const copy = [...prev];
+                const target = copy[copy.length - 1];
+                copy[copy.length - 1] = { ...target, name: nameDraft.trim() };
+                return copy;
+              });
+              setScreen("passwordCreation");
+            }}
+          />
         )}
 
         {screen === "passwordCreation" && (
-          <>
-            <Header title="Password Creation" />
-            <TextInput
-              placeholder="Create strong password"
-              secureTextEntry
-              style={styles.input}
-              value={passwordDraft}
-              onChangeText={setPasswordDraft}
-            />
-            <PrimaryButton
-              label="Continue"
-              onPress={() => {
-                if (passwordDraft.length < 8) {
-                  Alert.alert("Weak password", "Use at least 8 characters.");
-                  return;
-                }
-                setUser((prev) => ({ ...prev, password: passwordDraft }));
-                setPasswordDraft("");
-                setScreen("emailRegistration");
-              }}
-            />
-          </>
+          <PasswordCreationScreen
+            onBack={() => setScreen("setup")}
+            onNext={(password) => {
+              setUser((prev) => ({ ...prev, password }));
+              setScreen("emailRegistration");
+            }}
+          />
         )}
 
         {screen === "emailRegistration" && (
-          <>
-            <Header title="Email Registration" />
-            <TextInput
-              placeholder="Email address"
-              style={styles.input}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              value={emailDraft}
-              onChangeText={setEmailDraft}
-            />
-            <PrimaryButton
-              label="Finish Setup"
-              onPress={() => {
-                if (!emailDraft.includes("@")) {
-                  Alert.alert("Invalid email", "Enter a valid email address.");
-                  return;
-                }
-                setUser((prev) => ({ ...prev, email: emailDraft.trim() }));
-                setEmailDraft("");
-                setScreen("dashboard");
-              }}
-            />
-          </>
+          <EmailRegistrationScreen
+            onBack={() => setScreen("passwordCreation")}
+            onNext={(email) => {
+              setUser((prev) => ({ ...prev, email }));
+              setScreen("dashboard");
+            }}
+          />
         )}
 
         {screen === "fingerprintVerification" && (
-          <>
-            <Header title="Fingerprint Verification" />
-            <Text style={styles.subtitle}>Place your finger on the sensor to unlock dashboard.</Text>
-            <PrimaryButton label="Simulate Verify" onPress={() => setScreen("dashboard")} />
-          </>
+          <VerificationScreen
+            deviceId={connectedDeviceId}
+            onBack={() => setScreen("hotspot")}
+            onVerified={() => setScreen("dashboard")}
+          />
         )}
 
         {screen === "dashboard" && (
-          <>
-            <Header title="Dashboard" />
-            <Card title="User" value={`${user.name} (${user.email || "No email"})`} />
-            <Card title="Fingerprints" value={`${fingerprints.length} registered`} />
-            <PrimaryButton label="Add Fingerprint" onPress={() => setScreen("fingerprintRegistration")} />
-            <GhostButton
-              label="Reset App"
-              onPress={() => {
-                setUser(DEFAULT_USER);
-                setUsersList(INITIAL_USERS);
-                setFingerprints([]);
-                setScreen("setup");
-              }}
-            />
-          </>
+          <DashboardScreen
+            user={user}
+            fingerprints={fingerprints}
+            onAddFingerprint={() => setScreen("fingerprintRegistration")}
+            onResetApp={() => {
+              setUser(DEFAULT_USER);
+              setUsersList(INITIAL_USERS);
+              setFingerprints([]);
+              setScreen("setup");
+            }}
+          />
         )}
       </View>
     </SafeAreaView>

@@ -8,13 +8,15 @@ import {
   Switch,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { sendWifiCredentials } from "./ble";
 
 type Props = {
+  deviceId: string | null;
   onBack: () => void;
   onNext: () => void;
 };
 
-export function HotspotScreen({ onBack, onNext }: Props) {
+export function HotspotScreen({ deviceId, onBack, onNext }: Props) {
   const [wifiEnabled, setWifiEnabled] = useState(true);
   const [ssid, setSsid] = useState("");
   const [password, setPassword] = useState("");
@@ -47,7 +49,7 @@ export function HotspotScreen({ onBack, onNext }: Props) {
       {/* Decorative Center */}
       <View style={styles.centerGraphic}>
         <Ionicons name="phone-portrait-outline" size={56} color="#d4d4d8" />
-        
+
         <View style={styles.dotsContainer}>
           <View style={styles.dot} />
           <View style={styles.dot} />
@@ -77,12 +79,25 @@ export function HotspotScreen({ onBack, onNext }: Props) {
       />
 
       {/* Connect Button */}
-      <Pressable 
-        style={styles.connectButton} 
-        onPress={() => {
-          // If you need to map this data, you can save it locally here,
-          // For now, we just pass to the next screen.
-          onNext();
+      <Pressable
+        style={styles.connectButton}
+        onPress={async () => {
+          if (!deviceId) {
+            import("react-native").then(rn => rn.Alert.alert("Error", "No connected device."));
+            return;
+          }
+          if (!ssid) {
+            import("react-native").then(rn => rn.Alert.alert("Error", "Please enter the hotspot name."));
+            return;
+          }
+
+          const success = await sendWifiCredentials(deviceId, ssid, password);
+          if (success) {
+            import("react-native").then(rn => rn.Alert.alert("Success", "Hotspot credentials sent!"));
+            onNext();
+          } else {
+            import("react-native").then(rn => rn.Alert.alert("Error", "Failed to send credentials over Bluetooth."));
+          }
         }}
       >
         <Text style={styles.connectButtonText}>Connect to Hotspot</Text>
@@ -92,7 +107,7 @@ export function HotspotScreen({ onBack, onNext }: Props) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { 
+  wrap: {
     flex: 1,
     backgroundColor: "#ffffff",
   },
@@ -105,10 +120,10 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 16,
   },
-  title: { 
-    fontSize: 22, 
-    fontWeight: "700", 
-    color: "#111" 
+  title: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#111"
   },
   toggleCard: {
     backgroundColor: "#f4f4f5",
