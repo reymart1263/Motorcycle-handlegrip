@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { monitorFingerprintVerification } from './ble';
+import { monitorFingerprintEvents } from './ble';
 
 type Props = {
   deviceId: string | null;
@@ -14,8 +14,10 @@ export function VerificationScreen({ deviceId, onBack, onVerified }: Props) {
     if (!deviceId) return;
 
     // Start listening to the ESP32 fingerprint characteristic
-    const subscription = monitorFingerprintVerification(deviceId, () => {
-      onVerified();
+    const subscription = monitorFingerprintEvents(deviceId, (event) => {
+      if (event.verified === true) {
+        onVerified();
+      }
     });
 
     return () => {

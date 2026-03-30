@@ -1,179 +1,322 @@
-import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { User, FingerprintData } from './types';
+import { listFingerprints, monitorFingerprintEvents } from './ble';
 
 type Props = {
   user: User;
   fingerprints: FingerprintData[];
+  deviceId: string | null;
   onAddFingerprint: () => void;
-  onResetApp: () => void;
+  onRemoveFingerprint: (id: string, slot: number) => void;
+  onResetHardware: () => void;
+  onSystemReset: () => void;
+  onUpdateFingerprints?: (fingerprints: FingerprintData[]) => void;
 };
 
-export function DashboardScreen({ user, fingerprints, onAddFingerprint, onResetApp }: Props) {
+export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onResetHardware, onSystemReset, onUpdateFingerprints }: Props) {
+  const [hwCount, setHwCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!deviceId) return;
+
+    // Listen for the 'count' event from ZW101
+    const subscription = monitorFingerprintEvents(deviceId, (event) => {
+      if (event.event === 'count') {
+        console.log('ZW101 Hardware Fingerprint Count:', event.total);
+        setHwCount(event.total);
+      }
+    });
+
+    // Request the count from the hardware
+    listFingerprints(deviceId);
+
+    return () => {
+      subscription.remove();
+    };
+  }, [deviceId]);
+
+  const confirmDelete = (fp: FingerprintData) => {
+    Alert.alert(
+      "Remove Fingerprint",
+      `Are you sure you want to remove "${fp.name}" from your device and the sensor?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Remove", 
+          style: "destructive", 
+          onPress: () => onRemoveFingerprint(fp.id, fp.slot) 
+        }
+      ]
+    );
+  };
+
   return (
-    <View style={styles.container}>
-      {/* Header Profile Area */}
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{user.name.charAt(0).toUpperCase()}</Text>
-        </View>
-        <Text style={styles.welcomeText}>Welcome back,</Text>
-        <Text style={styles.userName}>{user.name}</Text>
-      </View>
-
-      <View style={styles.content}>
-        <Text style={styles.sectionTitle}>Overview</Text>
-        
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Ionicons name="mail-outline" size={20} color="#71717a" />
-            <Text style={styles.cardTitle}>Email Address</Text>
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      {/* Location Card */}
+      <View style={styles.locationCard}>
+        <View style={styles.locationHeader}>
+          <View style={styles.locIconCircle}>
+            <Ionicons name="compass" size={20} color="#71717a" />
           </View>
-          <Text style={styles.cardValue}>
-            {user.email || 'No email registered'}
-          </Text>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Ionicons name="finger-print-outline" size={20} color="#71717a" />
-            <Text style={styles.cardTitle}>Registered Fingerprints</Text>
+          <View>
+            <Text style={styles.locLabel}>Current Location</Text>
+            <Text style={styles.locCoords}>40.7128° N, 74.0060° W</Text>
           </View>
-          <Text style={styles.cardValue}>
-            {fingerprints.length} active
-          </Text>
         </View>
-      </View>
-
-      <View style={styles.footer}>
-        <Pressable style={styles.button} onPress={onAddFingerprint}>
-          <Ionicons name="add" size={20} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.buttonText}>Add Fingerprint</Text>
-        </Pressable>
-        <Pressable style={styles.ghostButton} onPress={onResetApp}>
-          <Text style={styles.ghostButtonText}>Reset App</Text>
+        <Pressable style={styles.trackButton}>
+          <Text style={styles.trackButtonText}>Track Location</Text>
         </Pressable>
       </View>
-    </View>
+
+      {/* User Information */}
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>User Information</Text>
+      </View>
+      <View style={styles.userCard}>
+        <View style={styles.userAvatarBox}>
+          <Ionicons name="person-outline" size={28} color="#a1a1aa" />
+        </View>
+        <View style={styles.userInfoText}>
+          <View style={styles.nameRow}>
+            <Text style={styles.userNameText}>{user.name}</Text>
+            <Pressable style={styles.editIcon}>
+              <MaterialCommunityIcons name="pencil" size={16} color="#d4d4d8" />
+            </Pressable>
+          </View>
+          <Text style={styles.userEmailText}>{user.email || 'almorfe.paulo@gmail.com'}</Text>
+        </View>
+      </View>
+
+      {/* Fingerprint Access */}
+      <View style={[styles.sectionHeader, { marginTop: 24 }]}>
+        <Text style={styles.sectionTitle}>Fingerprint Access</Text>
+      </View>
+      
+      {fingerprints.map((fp, index) => (
+        <View key={fp.id || index} style={styles.fpCard}>
+          <View style={styles.fpAvatarBox}>
+            <Ionicons name="person-outline" size={20} color="#a1a1aa" />
+          </View>
+          <View style={styles.userInfoText}>
+            <Text style={styles.userNameText}>{fp.name}</Text>
+            <Text style={styles.tapText}>TAP TO MANAGE ACCESS</Text>
+          </View>
+          <Pressable style={styles.fpEditIcon} onPress={() => confirmDelete(fp)}>
+            <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
+          </Pressable>
+        </View>
+      ))}
+
+      {/* Add Fingerprint Button */}
+      <Pressable style={styles.addFpButton} onPress={onAddFingerprint}>
+        <MaterialCommunityIcons name="plus" size={20} color="#a1a1aa" />
+        <Text style={styles.addFpText}>Add Fingerprint</Text>
+      </Pressable>
+
+      <View style={styles.divider} />
+
+      {/* Reset Options */}
+      <View style={styles.resetContainer}>
+        <Pressable onPress={onResetHardware}>
+          <Text style={styles.resetLink}>RESET FINGERPRINT MEMORY</Text>
+        </Pressable>
+        <Pressable onPress={onSystemReset}>
+          <Text style={styles.systemResetLink}>SYSTEM RESET (TESTING ONLY)</Text>
+        </Pressable>
+      </View>
+
+      {hwCount !== null && (
+        <View style={styles.hwStatus}>
+          <Text style={styles.hwStatusText}>Hardware Status: {hwCount} fingerprint(s) in ZW101</Text>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9fafb', // Slightly grey background to make cards pop
-  },
-  header: {
-    paddingTop: 60,
-    paddingBottom: 32,
-    paddingHorizontal: 24,
     backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
   },
-  avatar: {
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 40,
+  },
+  locationCard: {
+    backgroundColor: '#f9f9fb',
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 32,
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  locIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  locLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  locCoords: {
+    fontSize: 14,
+    color: '#18181b',
+    fontWeight: '700',
+  },
+  trackButton: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#f4f4f5',
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  trackButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#3f3f46',
+  },
+  sectionHeader: {
+    marginBottom: 14,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#18181b',
+  },
+  userCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9f9fb',
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 16,
+  },
+  userAvatarBox: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#111',
-    alignItems: 'center',
+    backgroundColor: '#f4f4f5',
     justifyContent: 'center',
-    marginBottom: 16,
+    alignItems: 'center',
+    marginRight: 16,
   },
-  avatarText: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-  welcomeText: {
-    fontSize: 15,
-    color: '#71717a',
-    marginBottom: 4,
-  },
-  userName: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#111',
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 24,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111',
-    marginBottom: 16,
-    marginLeft: 4,
-  },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.03,
-    shadowRadius: 8,
-    elevation: 2,
-    borderWidth: 1,
-    borderColor: '#f9fafb',
-  },
-  cardHeader: {
+  nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
   },
-  cardTitle: {
-    fontSize: 14,
-    color: '#71717a',
-    fontWeight: '600',
+  userNameText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#18181b',
+  },
+  editIcon: {
     marginLeft: 8,
   },
-  cardValue: {
-    fontSize: 16,
-    color: '#111',
-    fontWeight: '600',
+  userEmailText: {
+    fontSize: 13,
+    color: '#a1a1aa',
+    marginTop: 4,
   },
-  footer: {
-    paddingHorizontal: 20,
-    paddingBottom: 32,
-    backgroundColor: '#f9fafb',
-    gap: 12,
-  },
-  button: {
-    backgroundColor: '#000',
+  fpCard: {
     flexDirection: 'row',
-    width: '100%',
-    paddingVertical: 18,
-    borderRadius: 16,
+    alignItems: 'center',
+    backgroundColor: '#f9f9fb',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 12,
+  },
+  fpAvatarBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  tapText: {
+    fontSize: 10,
+    color: '#a1a1aa',
+    fontWeight: '700',
+    marginTop: 2,
+    letterSpacing: 0.5,
+  },
+  fpEditIcon: {
+    position: 'absolute',
+    right: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userInfoText: {
+    flex: 1,
+  },
+  addFpButton: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  ghostButton: {
-    width: '100%',
+    backgroundColor: '#e5e7eb',
+    borderRadius: 18,
     paddingVertical: 18,
-    borderRadius: 16,
+    marginTop: 12,
+    gap: 8,
+  },
+  addFpText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#71717a',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#f4f4f5',
+    marginVertical: 40,
+  },
+  resetContainer: {
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    gap: 20,
   },
-  ghostButtonText: {
-    color: '#dc2626', // Red color for reset action
-    fontSize: 16,
-    fontWeight: '600',
+  resetLink: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#a1a1aa',
+    letterSpacing: 0.5,
   },
+  systemResetLink: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#e5e7eb',
+    letterSpacing: 0.5,
+  },
+  hwStatus: {
+    marginTop: 30,
+    alignItems: 'center',
+  },
+  hwStatusText: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    fontStyle: 'italic',
+  }
 });

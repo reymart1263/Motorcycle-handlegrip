@@ -80,7 +80,14 @@ export function stopBleScan(): void {
   getBleManager()?.stopDeviceScan();
 }
 
+// BLE Service & Characteristic UUIDs
+export const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+export const WIFI_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+export const COMMAND_CHAR_UUID = "deadbeef-1234-5678-9abc-def012345678";
+export const EVENT_CHAR_UUID = "abcdef01-1234-5678-9abc-def012345678";
+
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
 function encodeBase64(input: string): string {
   let str = input;
   let output = '';
@@ -96,6 +103,22 @@ function encodeBase64(input: string): string {
   return output;
 }
 
+function decodeBase64(input: string): string {
+  let str = input.replace(/=+$/, '');
+  let output = '';
+  if (str.length % 4 == 1) {
+    throw new Error("'atob' failed: The string to be decoded is not correctly encoded.");
+  }
+  for (let bc = 0, bs = 0, buffer, i = 0;
+    buffer = str.charAt(i++);
+    ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer,
+      bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0
+  ) {
+    buffer = BASE64_CHARS.indexOf(buffer);
+  }
+  return output;
+}
+
 export async function connectToDevice(deviceId: string): Promise<boolean> {
   const m = getBleManager();
   if (!m) return false;
@@ -103,6 +126,12 @@ export async function connectToDevice(deviceId: string): Promise<boolean> {
     m.stopDeviceScan();
     const device = await m.connectToDevice(deviceId);
     await device.discoverAllServicesAndCharacteristics();
+    
+    // Request a larger MTU to handle JSON strings larger than 20 bytes
+    if (Platform.OS === 'android') {
+      await device.requestMTU(512);
+    }
+    
     return true;
   } catch (err) {
     console.error("Failed to connect", err);
@@ -114,10 +143,6 @@ export async function sendWifiCredentials(deviceId: string, ssid: string, pass: 
   const m = getBleManager();
   if (!m) return false;
 
-  // Typical UUIDs used in ESP32 tutorials. These should match your ESP32 Arduino sketch.
-  const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-  const CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-
   try {
     const payload = JSON.stringify({ s: ssid, p: pass });
     const base64Data = encodeBase64(payload);
@@ -125,7 +150,7 @@ export async function sendWifiCredentials(deviceId: string, ssid: string, pass: 
     await m.writeCharacteristicWithResponseForDevice(
       deviceId,
       SERVICE_UUID,
-      CHAR_UUID,
+      WIFI_CHAR_UUID,
       base64Data
     );
     return true;
@@ -135,34 +160,103 @@ export async function sendWifiCredentials(deviceId: string, ssid: string, pass: 
   }
 }
 
-export function monitorFingerprintVerification(
+export async function sendBleCommand(deviceId: string, command: object): Promise<boolean> {
+  const m = getBleManager();
+  if (!m) return false;
+
+  try {
+    const payload = JSON.stringify(command);
+    const base64Data = encodeBase64(payload);
+    
+    await m.writeCharacteristicWithResponseForDevice(
+      deviceId,
+      SERVICE_UUID,
+      COMMAND_CHAR_UUID,
+      base64Data
+    );
+    return true;
+  } catch (err) {
+    console.error("Failed to send command to ESP32", err);
+    return false;
+  }
+}
+
+export async function enrollFingerprint(deviceId: string, id: number): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "enroll", id });
+}
+
+export async function deleteFingerprint(deviceId: string, id: number): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "delete", id });
+}
+
+export async function listFingerprints(deviceId: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "list" });
+}
+
+export function monitorFingerprintEvents(
   deviceId: string,
-  onVerified: () => void,
+  onEvent: (event: any) => void,
 ) {
   const m = getBleManager();
   if (!m) return { remove: () => {} };
 
-  const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"; 
-  const CHAR_UUID_FINGERPRINT = "abcdef01-1234-5678-9abc-def012345678"; // Define a characteristic for the fingerprint module
-
   try {
-    const subscription = m.monitorCharacteristicForDevice(
+    return m.monitorCharacteristicForDevice(
       deviceId,
       SERVICE_UUID,
-      CHAR_UUID_FINGERPRINT,
+      EVENT_CHAR_UUID,
       (error, characteristic) => {
         if (error) {
           console.warn("Fingerprint monitoring error:", error.message);
           return;
         }
         if (characteristic?.value) {
-          onVerified();
+          try {
+            const decoded = decodeBase64(characteristic.value);
+            const eventData = JSON.parse(decoded);
+            onEvent(eventData);
+          } catch (e) {
+            console.warn("Failed to parse event data", e);
+          }
         }
       }
     );
-    return subscription;
   } catch (err) {
     console.warn("Failed to subscribe to fingerprint characteristic", err);
     return { remove: () => {} };
   }
+}
+
+export async function resetFingerprintMemory(deviceId: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "clear" });
+}
+
+export function scanAndConnect(
+  targetDeviceId: string,
+  onConnected: () => void,
+  onTimeout: () => void
+) {
+  const m = getBleManager();
+  if (!m) return;
+
+  let found = false;
+  startBleScan(async (device) => {
+    if (device.id === targetDeviceId && !found) {
+      found = true;
+      stopBleScan();
+      const success = await connectToDevice(device.id);
+      if (success) {
+        onConnected();
+      } else {
+        onTimeout();
+      }
+    }
+  });
+
+  setTimeout(() => {
+    if (!found) {
+      stopBleScan();
+      onTimeout();
+    }
+  }, 15000); // 15s timeout
 }

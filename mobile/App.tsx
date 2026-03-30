@@ -23,20 +23,16 @@ import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
 import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
 import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
 import { DashboardScreen } from "./src/DashboardScreen";
+import { deleteFingerprint, scanAndConnect, resetFingerprintMemory } from "./src/ble";
 
 const STORAGE_KEY = "grip_mobile_app_state";
+const DEVICE_KEY = "grip_last_device_id";
 
 const INITIAL_USERS = [
   { id: "user1", name: "John Doe", email: "john@example.com" },
-  { id: "user2", name: "Jane Smith", email: "jane@example.com" },
-  { id: "user3", name: "Mike Johnson", email: "mike@example.com" },
 ];
 
-const INITIAL_FINGERPRINTS: FingerprintData[] = [
-  { id: "fp1", name: "Thumb", userId: "user1", slot: 1 },
-  { id: "fp2", name: "Index", userId: "user1", slot: 2 },
-  { id: "fp3", name: "Thumb", userId: "user2", slot: 1 },
-];
+const INITIAL_FINGERPRINTS: FingerprintData[] = [];
 
 const DEFAULT_USER: User = { name: INITIAL_USERS[0].name, email: INITIAL_USERS[0].email };
 
@@ -46,10 +42,8 @@ function MainApp() {
   const [user, setUser] = useState<User>(DEFAULT_USER);
   const [usersList, setUsersList] = useState(INITIAL_USERS);
   const [fingerprints, setFingerprints] = useState(INITIAL_FINGERPRINTS);
-  const [passwordDraft, setPasswordDraft] = useState("");
-  const [emailDraft, setEmailDraft] = useState("");
-  const [nameDraft, setNameDraft] = useState("");
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null);
+  const [isAutoConnecting, setIsAutoConnecting] = useState(false);
 
   useEffect(() => {
     const hydrate = async () => {
@@ -61,65 +55,105 @@ function MainApp() {
           setUsersList(parsed.usersList ?? INITIAL_USERS);
           setFingerprints(parsed.fingerprints ?? INITIAL_FINGERPRINTS);
         }
-      } catch (error) {
-        console.warn("Failed loading local state", error);
-      }
 
-      try {
-        const remote = await fetchRemoteState();
-        if (remote) {
-          setUser(remote.user ?? DEFAULT_USER);
-          setUsersList(remote.usersList ?? INITIAL_USERS);
-          setFingerprints(remote.fingerprints ?? INITIAL_FINGERPRINTS);
+        const lastId = await AsyncStorage.getItem(DEVICE_KEY);
+        if (lastId) {
+          setIsAutoConnecting(true);
+          scanAndConnect(
+            lastId,
+            () => {
+              setConnectedDeviceId(lastId);
+              setIsAutoConnecting(false);
+              // If we have a password, go to verification (login)
+              // Otherwise go to registration
+              setScreen(user.password ? "fingerprintVerification" : "dashboard");
+            },
+            () => {
+              setIsAutoConnecting(false);
+              // If auto-connect fails, just stay on the last screen or dashboard
+            }
+          );
         }
       } catch (error) {
-        console.warn("Failed loading backend state", error);
+        console.warn("Failed loading local state", error);
       } finally {
         setLoading(false);
       }
     };
     hydrate();
-  }, []);
+  }, [user.password]);
 
   useEffect(() => {
     if (loading) return;
     const payload: ApiState = { user, usersList, fingerprints };
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch((error) =>
-      console.warn("Failed writing local state", error),
-    );
-    pushRemoteState(payload).catch((error) => console.warn("Failed syncing backend", error));
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch(() => {});
+    pushRemoteState(payload);
   }, [loading, user, usersList, fingerprints]);
 
-  const currentUserFingerprints = useMemo(
-    () => fingerprints.filter((fp) => fp.userId === usersList[0]?.id),
-    [fingerprints, usersList],
-  );
-
   const registerFingerprint = () => {
-    if (currentUserFingerprints.length >= 5) {
-      Alert.alert("Limit reached", "Each user can only register up to 5 fingerprints.");
-      return;
-    }
-    const nextSlot = currentUserFingerprints.length + 1;
-    const newFp: FingerprintData = {
-      id: Math.random().toString(36).slice(2, 10),
-      name: `Fingerprint ${fingerprints.length + 1}`,
-      userId: usersList[0].id,
-      slot: nextSlot,
-    };
-    setFingerprints((prev) => [...prev, newFp]);
     setScreen("fingerprintNaming");
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.centered}>
-        <StatusBar barStyle="dark-content" />
-        <ActivityIndicator size="large" />
-        <Text style={styles.subtitle}>Preparing app data...</Text>
-      </SafeAreaView>
+  const handleFullSystemReset = async () => {
+    Alert.alert(
+      "SYSTEM RESET",
+      "This will wipe ALL fingerprints from the sensor and RESET the entire app. Are you sure?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "RESET EVERYTHING",
+          style: "destructive",
+          onPress: async () => {
+            if (connectedDeviceId) {
+              await resetFingerprintMemory(connectedDeviceId);
+            }
+            await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
+            setUser(DEFAULT_USER);
+            setFingerprints([]);
+            setConnectedDeviceId(null);
+            setScreen("setup");
+          }
+        }
+      ]
     );
-  }
+  };
+
+  const deleteFingerprintLogic = async (id: string, slot: number) => {
+    if (connectedDeviceId) {
+      try {
+        const success = await deleteFingerprint(connectedDeviceId, slot);
+        if (!success) {
+          Alert.alert("Hardware error", "Could not remove fingerprint from the sensor. It might already be gone.");
+        }
+      } catch (e) {
+        console.warn("Failed to send delete command", e);
+      }
+    }
+    
+    setFingerprints((prev) => prev.filter((fp) => fp.id !== id));
+  };
+
+  const handleResetHardware = async () => {
+    if (!connectedDeviceId) return;
+    Alert.alert(
+      "WIPE HARDWARE",
+      "This will remove ALL fingerprints from the physical sensor. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "WIPE",
+          style: "destructive",
+          onPress: async () => {
+            const success = await resetFingerprintMemory(connectedDeviceId);
+            if (success) {
+              setFingerprints([]);
+              Alert.alert("Success", "Hardware memory cleared.");
+            }
+          }
+        }
+      ]
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -134,6 +168,7 @@ function MainApp() {
             onBack={() => setScreen("setup")}
             onNext={(deviceId) => {
               setConnectedDeviceId(deviceId);
+              AsyncStorage.setItem(DEVICE_KEY, deviceId);
               setScreen("hotspot");
             }}
           />
@@ -207,13 +242,12 @@ function MainApp() {
           <DashboardScreen
             user={user}
             fingerprints={fingerprints}
+            deviceId={connectedDeviceId}
             onAddFingerprint={() => setScreen("fingerprintRegistration")}
-            onResetApp={() => {
-              setUser(DEFAULT_USER);
-              setUsersList(INITIAL_USERS);
-              setFingerprints([]);
-              setScreen("setup");
-            }}
+            onRemoveFingerprint={deleteFingerprintLogic}
+            onResetHardware={handleResetHardware}
+            onSystemReset={handleFullSystemReset}
+            onUpdateFingerprints={setFingerprints}
           />
         )}
       </View>
