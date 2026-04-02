@@ -207,7 +207,9 @@ export function monitorFingerprintEvents(
       EVENT_CHAR_UUID,
       (error, characteristic) => {
         if (error) {
-          console.warn("Fingerprint monitoring error:", error.message);
+          if (error.message !== "Operation was cancelled") {
+            console.warn("Fingerprint monitoring error:", error.message);
+          }
           return;
         }
         if (characteristic?.value) {

@@ -4,6 +4,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
 
 // --- UUIDs (Must match mobile app) ---
 #define SERVICE_UUID           "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -95,7 +96,6 @@ class CommandCallbacks: public BLECharacteristicCallbacks {
     }
 };
 
-// --- Fingerprint Enrollment Logic ---
 uint8_t getFingerprintEnroll() {
   int p = -1;
   sendStatus("place_finger", enrollSlot, -1, 1);
