@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert, TextInput } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { User, FingerprintData } from './types';
 import { listFingerprints, monitorFingerprintEvents } from './ble';
@@ -13,19 +13,39 @@ type Props = {
   onResetHardware: () => void;
   onSystemReset: () => void;
   onUpdateFingerprints?: (fingerprints: FingerprintData[]) => void;
+  onUpdateUser?: (user: User) => void;
 };
 
-export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onResetHardware, onSystemReset, onUpdateFingerprints }: Props) {
+export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onResetHardware, onSystemReset, onUpdateFingerprints, onUpdateUser }: Props) {
   const [hwCount, setHwCount] = useState<number | null>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(user.name);
+
+  const handleEditSave = () => {
+    if (isEditingName) {
+      if (nameDraft.trim() && nameDraft !== user.name && onUpdateUser) {
+        onUpdateUser({ ...user, name: nameDraft.trim() });
+      }
+      setIsEditingName(false);
+    } else {
+      setNameDraft(user.name);
+      setIsEditingName(true);
+    }
+  };
 
   useEffect(() => {
     if (!deviceId) return;
 
-    // Listen for the 'count' event from ZW101
+    // Listen for events from ZW101
     const subscription = monitorFingerprintEvents(deviceId, (event) => {
       if (event.event === 'count') {
         console.log('ZW101 Hardware Fingerprint Count:', event.total);
         setHwCount(event.total);
+      } else if (event.event === 'clear_ok') {
+        setHwCount(0);
+        if (onUpdateFingerprints) onUpdateFingerprints([]);
+      } else if (event.event === 'delete_ok') {
+        setHwCount(prev => (prev && prev > 0) ? prev - 1 : 0);
       }
     });
 
@@ -36,6 +56,12 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
       subscription.remove();
     };
   }, [deviceId]);
+
+  useEffect(() => {
+    // We intentionally removed the placeholder sync logic here 
+    // to prevent the app from spamming the UI with unnamed fingerprints
+    // that were previously stored on the hardware module.
+  }, []);
 
   const confirmDelete = (fp: FingerprintData) => {
     Alert.alert(
@@ -80,9 +106,20 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
         </View>
         <View style={styles.userInfoText}>
           <View style={styles.nameRow}>
-            <Text style={styles.userNameText}>{user.name}</Text>
-            <Pressable style={styles.editIcon}>
-              <MaterialCommunityIcons name="pencil" size={16} color="#d4d4d8" />
+            {isEditingName ? (
+              <TextInput
+                style={styles.nameInput}
+                value={nameDraft}
+                onChangeText={setNameDraft}
+                autoFocus
+                onBlur={handleEditSave}
+                onSubmitEditing={handleEditSave}
+              />
+            ) : (
+              <Text style={styles.userNameText}>{user.name}</Text>
+            )}
+            <Pressable style={styles.editIcon} onPress={handleEditSave} hitSlop={10}>
+              <MaterialCommunityIcons name={isEditingName ? "check" : "pencil"} size={16} color={isEditingName ? "#10b981" : "#d4d4d8"} />
             </Pressable>
           </View>
           <Text style={styles.userEmailText}>{user.email || 'almorfe.paulo@gmail.com'}</Text>
@@ -228,6 +265,16 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#18181b',
+  },
+  nameInput: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#18181b',
+    padding: 0,
+    margin: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: '#d4d4d8',
+    minWidth: 100,
   },
   editIcon: {
     marginLeft: 8,

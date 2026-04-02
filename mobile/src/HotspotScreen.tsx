@@ -8,7 +8,7 @@ import {
   Switch,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { sendWifiCredentials } from "./ble";
+import { sendWifiCredentials, monitorFingerprintEvents } from "./ble";
 
 type Props = {
   deviceId: string | null;

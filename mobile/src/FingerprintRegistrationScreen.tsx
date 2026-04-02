@@ -5,14 +5,15 @@ import { enrollFingerprint, monitorFingerprintEvents } from './ble';
 
 type Props = {
   deviceId: string | null;
+  nextSlot?: number;
   onBack: () => void;
   onSkip: () => void;
-  onRegister: () => void;
+  onRegister: (fp: { id: string; slot: number; name: string; userId: string }) => void;
 };
 
 type EnrollmentStep = 'idle' | 'starting' | 'place_finger' | 'remove_finger' | 'step2' | 'success' | 'error';
 
-export function FingerprintRegistrationScreen({ deviceId, onBack, onSkip, onRegister }: Props) {
+export function FingerprintRegistrationScreen({ deviceId, nextSlot = 1, onBack, onSkip, onRegister }: Props) {
   const [step, setStep] = useState<EnrollmentStep>('idle');
   const [statusMessage, setStatusMessage] = useState('Ready to begin');
   const [isRegistering, setIsRegistering] = useState(false);
@@ -37,7 +38,8 @@ export function FingerprintRegistrationScreen({ deviceId, onBack, onSkip, onRegi
         setStatusMessage('Registration successful!');
         setTimeout(() => {
           setIsRegistering(false);
-          onRegister();
+          const assignedSlot = nextSlot;
+          onRegister({ id: `fp_${Date.now()}`, slot: assignedSlot, name: 'New Fingerprint', userId: 'user1' });
         }, 1500);
       } else if (event.event === 'enroll_fail') {
         setStep('error');
@@ -62,9 +64,8 @@ export function FingerprintRegistrationScreen({ deviceId, onBack, onSkip, onRegi
     setStep('starting');
     setStatusMessage('Initializing enrollment...');
 
-    // We'll use a dummy ID for now, or the app can manage this.
-    // Based on App.tsx, the slot is fingerprints.length + 1
-    const success = await enrollFingerprint(deviceId, 1); // For now using slot 1 as default for test
+    // Use the dynamically provided slot from props
+    const success = await enrollFingerprint(deviceId, nextSlot);
     if (!success) {
       setStep('error');
       setStatusMessage('Failed to send start command');

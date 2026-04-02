@@ -14,6 +14,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ApiState, FingerprintData, Screen, User } from "./src/types";
 import { fetchRemoteState, pushRemoteState } from "./src/api";
+import { getBleManager, SERVICE_UUID } from "./src/ble";
 import { BluetoothPairingScreen } from "./src/BluetoothPairingScreen";
 import { HotspotScreen } from "./src/HotspotScreen";
 import { SetupScreen } from "./src/SetupScreen";
@@ -44,6 +45,7 @@ function MainApp() {
   const [fingerprints, setFingerprints] = useState(INITIAL_FINGERPRINTS);
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null);
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
+  const [isFromDashboard, setIsFromDashboard] = useState(false);
 
   useEffect(() => {
     const hydrate = async () => {
@@ -58,21 +60,9 @@ function MainApp() {
 
         const lastId = await AsyncStorage.getItem(DEVICE_KEY);
         if (lastId) {
-          setIsAutoConnecting(true);
-          scanAndConnect(
-            lastId,
-            () => {
-              setConnectedDeviceId(lastId);
-              setIsAutoConnecting(false);
-              // If we have a password, go to verification (login)
-              // Otherwise go to registration
-              setScreen(user.password ? "fingerprintVerification" : "dashboard");
-            },
-            () => {
-              setIsAutoConnecting(false);
-              // If auto-connect fails, just stay on the last screen or dashboard
-            }
-          );
+          setConnectedDeviceId(lastId);
+          setIsAutoConnecting(false);
+          setScreen(user.password ? "fingerprintVerification" : "dashboard");
         }
       } catch (error) {
         console.warn("Failed loading local state", error);
@@ -83,6 +73,47 @@ function MainApp() {
     hydrate();
   }, [user.password]);
 
+  // Global Bluetooth Background Manager
+  useEffect(() => {
+    if (!connectedDeviceId) return;
+    const m = getBleManager();
+    if (!m) return;
+    
+    let isMounted = true;
+    
+    const connectSilently = async () => {
+       try {
+          const isConn = await m.isDeviceConnected(connectedDeviceId);
+          if (!isConn) {
+             const d = await m.connectToDevice(connectedDeviceId, { autoConnect: true });
+             await d.discoverAllServicesAndCharacteristics();
+             const { Platform } = require('react-native');
+             if (Platform.OS === 'android') await d.requestMTU(512);
+          } else {
+             const devices = await m.connectedDevices([SERVICE_UUID]);
+             const me = devices.find(x => x.id === connectedDeviceId);
+             if (me) await me.discoverAllServicesAndCharacteristics();
+          }
+       } catch (error) {
+          console.warn("Silently retrying background connection...", error);
+       }
+    };
+    
+    connectSilently();
+    
+    // Automatically reconnect forever if it drops
+    const sub = m.onDeviceDisconnected(connectedDeviceId, () => {
+      if (isMounted) {
+         setTimeout(connectSilently, 2000);
+      }
+    });
+    
+    return () => {
+      isMounted = false;
+      sub.remove();
+    };
+  }, [connectedDeviceId]);
+
   useEffect(() => {
     if (loading) return;
     const payload: ApiState = { user, usersList, fingerprints };
@@ -90,8 +121,17 @@ function MainApp() {
     pushRemoteState(payload);
   }, [loading, user, usersList, fingerprints]);
 
-  const registerFingerprint = () => {
+  const registerFingerprint = (newFp: FingerprintData) => {
+    setFingerprints((prev) => [...prev, newFp]);
     setScreen("fingerprintNaming");
+  };
+
+  const getNextSlot = () => {
+    let next = 1;
+    while (fingerprints.some(f => f.slot === next)) {
+      next++;
+    }
+    return next;
   };
 
   const handleFullSystemReset = async () => {
@@ -111,6 +151,7 @@ function MainApp() {
             setUser(DEFAULT_USER);
             setFingerprints([]);
             setConnectedDeviceId(null);
+            setIsFromDashboard(false);
             setScreen("setup");
           }
         }
@@ -178,15 +219,19 @@ function MainApp() {
           <HotspotScreen
             deviceId={connectedDeviceId}
             onBack={() => setScreen("bluetooth")}
-            onNext={() => setScreen(user.password ? "fingerprintVerification" : "fingerprintRegistration")}
+            onNext={() => {
+              setIsFromDashboard(false);
+              setScreen("fingerprintRegistration");
+            }}
           />
         )}
 
         {screen === "fingerprintRegistration" && (
           <FingerprintRegistrationScreen
             deviceId={connectedDeviceId}
-            onBack={() => setScreen("setup")}
-            onSkip={() => setScreen("passwordCreation")}
+            nextSlot={getNextSlot()}
+            onBack={() => setScreen(isFromDashboard ? "dashboard" : "hotspot")}
+            onSkip={() => setScreen(isFromDashboard ? "dashboard" : "passwordCreation")}
             onRegister={registerFingerprint}
           />
         )}
@@ -195,8 +240,9 @@ function MainApp() {
           <FingerprintNamingScreen
             onBack={() => setScreen("fingerprintRegistration")}
             onSave={(nameDraft) => {
+              const nextScreen = isFromDashboard ? "dashboard" : "passwordCreation";
               if (!nameDraft.trim()) {
-                setScreen("passwordCreation");
+                setScreen(nextScreen);
                 return;
               }
               setFingerprints((prev) => {
@@ -205,7 +251,7 @@ function MainApp() {
                 copy[copy.length - 1] = { ...target, name: nameDraft.trim() };
                 return copy;
               });
-              setScreen("passwordCreation");
+              setScreen(nextScreen);
             }}
           />
         )}
@@ -243,11 +289,15 @@ function MainApp() {
             user={user}
             fingerprints={fingerprints}
             deviceId={connectedDeviceId}
-            onAddFingerprint={() => setScreen("fingerprintRegistration")}
+            onAddFingerprint={() => {
+              setIsFromDashboard(true);
+              setScreen("fingerprintRegistration");
+            }}
             onRemoveFingerprint={deleteFingerprintLogic}
             onResetHardware={handleResetHardware}
             onSystemReset={handleFullSystemReset}
             onUpdateFingerprints={setFingerprints}
+            onUpdateUser={setUser}
           />
         )}
       </View>
