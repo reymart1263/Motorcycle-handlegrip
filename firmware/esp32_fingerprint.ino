@@ -55,7 +55,10 @@ class MyServerCallbacks: public BLEServerCallbacks {
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
       Serial.println("Device Disconnected");
-      pServer->getAdvertising()->start(); // Restart advertising
+      // Small delay before restarting to ensure the stack is ready
+      delay(500);
+      BLEDevice::startAdvertising(); 
+      Serial.println("Advertising Restarted");
     }
 };
 
@@ -172,7 +175,15 @@ void setup() {
   pEventCharacteristic->addDescriptor(new BLE2902());
 
   pService->start();
-  pServer->getAdvertising()->start();
+
+  // Configure Advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  // help with iPhone connections
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+
   Serial.println("BLE Ready. Waiting for connection...");
 }
 
