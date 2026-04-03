@@ -84,7 +84,6 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
   }, [deviceId]);
 
   useEffect(() => {
-    // Initial location check
     handleTrackLocation();
   }, []);
 
