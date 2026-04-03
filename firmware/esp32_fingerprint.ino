@@ -19,8 +19,10 @@
 HardwareSerial mySerial(2);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 
+BLEServer *pServer = NULL;
 BLECharacteristic *pEventCharacteristic;
 bool deviceConnected = false;
+bool oldDeviceConnected = false;
 int enrollSlot = -1;
 
 // --- Helper Functions ---
@@ -55,10 +57,6 @@ class MyServerCallbacks: public BLEServerCallbacks {
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
       Serial.println("Device Disconnected");
-      // Small delay before restarting to ensure the stack is ready
-      delay(500);
-      BLEDevice::startAdvertising(); 
-      Serial.println("Advertising Restarted");
     }
 };
 
@@ -155,7 +153,7 @@ void setup() {
 
   // BLE Setup
   BLEDevice::init("Motorcycle Handlegrip");
-  BLEServer *pServer = BLEDevice::createServer();
+  pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
   BLEService *pService = pServer->createService(SERVICE_UUID);
@@ -176,25 +174,36 @@ void setup() {
 
   pService->start();
 
-  // Configure Advertising
+  // Advertising Configuration
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);  // help with iPhone connections
+  pAdvertising->setMinPreferred(0x06);  // set value to help with iPhone connections
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
-
   Serial.println("BLE Ready. Waiting for connection...");
 }
 
 void loop() {
+  // --- Reconnection Logic ---
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500); // Give the local bluetooth stack time to clean up
+    pServer->startAdvertising(); // restart advertising
+    Serial.println("Bluetooth advertising restarted");
+    oldDeviceConnected = deviceConnected;
+  }
+  
+  if (deviceConnected && !oldDeviceConnected) {
+    oldDeviceConnected = deviceConnected;
+    Serial.println("Bluetooth connection recognized");
+  }
+
   if (enrollSlot != -1) {
     getFingerprintEnroll();
     enrollSlot = -1;
   }
 
-  // Active Verification mode (optional)
-  // You could add code here to always scan and notify "verified":true on match
+  // Active Verification mode
   uint8_t p = finger.getImage();
   if (p == FINGERPRINT_OK) {
     p = finger.image2Tz();
@@ -210,5 +219,5 @@ void loop() {
       }
     }
   }
-  delay(100);
+  delay(10); // Reduced delay for faster sensor response
 }
