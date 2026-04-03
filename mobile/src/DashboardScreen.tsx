@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Alert, TextInput } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { User, FingerprintData } from './types';
 import { listFingerprints, monitorFingerprintEvents } from './ble';
@@ -110,48 +109,30 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Map Section */}
-      <View style={styles.mapCard}>
-        <MapView
-          key={location ? `${location.lat}-${location.lon}` : 'initial'}
-          style={styles.map}
-          provider={PROVIDER_GOOGLE}
-          initialRegion={{
-            latitude: location ? location.lat : 14.5995,
-            longitude: location ? location.lon : 120.9842,
-            latitudeDelta: 0.005,
-            longitudeDelta: 0.005,
-          }}
-        >
-          {location && (
-            <Marker
-              coordinate={{ latitude: location.lat, longitude: location.lon }}
-              title="My Motorcycle"
-              description="Last detected location"
-            >
-              <View style={styles.markerContainer}>
-                <Ionicons name="location" size={32} color="#000" />
-              </View>
-            </Marker>
-          )}
-        </MapView>
-        
-        <View style={styles.mapOverlay}>
-          <Pressable 
-            style={[styles.smallTrackButton, isLocating && { opacity: 0.7 }]} 
-            onPress={handleTrackLocation}
-            disabled={isLocating}
-          >
-            <Ionicons 
-              name={isLocating ? "refresh" : "locate"} 
-              size={20} 
-              color="#000" 
-            />
-            <Text style={styles.smallTrackText}>
-              {isLocating ? 'Scanning...' : 'Track'}
+      {/* Location Card */}
+      <View style={styles.locationCard}>
+        <View style={styles.locationHeader}>
+          <View style={styles.locIconCircle}>
+            <Ionicons name="compass" size={20} color="#71717a" />
+          </View>
+          <View>
+            <Text style={styles.locLabel}>Current Location</Text>
+            <Text style={styles.locCoords}>
+              {isLocating ? 'Locating...' : 
+               location ? `${location.lat.toFixed(4)}° N, ${location.lon.toFixed(4)}° W` : 
+               'Unknown'}
             </Text>
-          </Pressable>
+          </View>
         </View>
+        <Pressable 
+          style={[styles.trackButton, isLocating && { opacity: 0.7 }]} 
+          onPress={handleTrackLocation}
+          disabled={isLocating}
+        >
+          <Text style={styles.trackButtonText}>
+            {isLocating ? 'Updating...' : 'Track Location'}
+          </Text>
+        </Pressable>
       </View>
 
       {/* User Information */}
@@ -242,47 +223,54 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 40,
   },
-  mapCard: {
-    height: 300,
+  locationCard: {
+    backgroundColor: '#f9f9fb',
     borderRadius: 24,
-    overflow: 'hidden',
+    padding: 20,
     marginBottom: 32,
-    backgroundColor: '#f4f4f5',
-    position: 'relative',
   },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  mapOverlay: {
-    position: 'absolute',
-    bottom: 12,
-    right: 12,
-  },
-  markerContainer: {
-    backgroundColor: 'rgba(255,255,255,0.8)',
-    padding: 6,
-    borderRadius: 40,
-    borderWidth: 2,
-    borderColor: '#000',
-  },
-  smallTrackButton: {
+  locationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
-    gap: 8,
+    marginBottom: 16,
   },
-  smallTrackText: {
-    fontSize: 13,
+  locIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  locLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  locCoords: {
+    fontSize: 14,
+    color: '#18181b',
     fontWeight: '700',
-    color: '#000',
+  },
+  trackButton: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#f4f4f5',
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  trackButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#3f3f46',
   },
   sectionHeader: {
     marginBottom: 14,
