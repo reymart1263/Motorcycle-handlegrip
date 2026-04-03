@@ -15,7 +15,12 @@ export function VerificationScreen({ deviceId, onBack, onVerified }: Props) {
 
     // Start listening to the ESP32 fingerprint characteristic
     const subscription = monitorFingerprintEvents(deviceId, (event) => {
-      if (event.verified === true) {
+      console.log('Verification event received:', event);
+      if (
+        event.verified === true || 
+        event.event === 'match_ok' || 
+        event.event === 'verify_ok'
+      ) {
         onVerified();
       }
     });

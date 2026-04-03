@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Alert, TextInput } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { User, FingerprintData } from './types';
 import { listFingerprints, monitorFingerprintEvents } from './ble';
 
@@ -20,6 +21,31 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
   const [hwCount, setHwCount] = useState<number | null>(null);
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(user.name);
+  const [location, setLocation] = useState<{ lat: number, lon: number } | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+
+  const handleTrackLocation = async () => {
+    setIsLocating(true);
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Allow location access to track your motorcycle.');
+        setIsLocating(false);
+        return;
+      }
+
+      let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setLocation({ 
+        lat: loc.coords.latitude, 
+        lon: loc.coords.longitude 
+      });
+    } catch (error) {
+      console.warn(error);
+      Alert.alert('Error', 'Could not fetch current location.');
+    } finally {
+      setIsLocating(false);
+    }
+  };
 
   const handleEditSave = () => {
     if (isEditingName) {
@@ -58,9 +84,8 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
   }, [deviceId]);
 
   useEffect(() => {
-    // We intentionally removed the placeholder sync logic here 
-    // to prevent the app from spamming the UI with unnamed fingerprints
-    // that were previously stored on the hardware module.
+    // Initial location check
+    handleTrackLocation();
   }, []);
 
   const confirmDelete = (fp: FingerprintData) => {
@@ -79,7 +104,12 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <ScrollView 
+      style={styles.container} 
+      contentContainerStyle={styles.scrollContent} 
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       {/* Location Card */}
       <View style={styles.locationCard}>
         <View style={styles.locationHeader}>
@@ -88,11 +118,21 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
           </View>
           <View>
             <Text style={styles.locLabel}>Current Location</Text>
-            <Text style={styles.locCoords}>40.7128° N, 74.0060° W</Text>
+            <Text style={styles.locCoords}>
+              {isLocating ? 'Locating...' : 
+               location ? `${location.lat.toFixed(4)}° N, ${location.lon.toFixed(4)}° W` : 
+               'Unknown'}
+            </Text>
           </View>
         </View>
-        <Pressable style={styles.trackButton}>
-          <Text style={styles.trackButtonText}>Track Location</Text>
+        <Pressable 
+          style={[styles.trackButton, isLocating && { opacity: 0.7 }]} 
+          onPress={handleTrackLocation}
+          disabled={isLocating}
+        >
+          <Text style={styles.trackButtonText}>
+            {isLocating ? 'Updating...' : 'Track Location'}
+          </Text>
         </Pressable>
       </View>
 
@@ -112,8 +152,9 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
                 value={nameDraft}
                 onChangeText={setNameDraft}
                 autoFocus
-                onBlur={handleEditSave}
                 onSubmitEditing={handleEditSave}
+                returnKeyType="done"
+                selectTextOnFocus
               />
             ) : (
               <Text style={styles.userNameText}>{user.name}</Text>
