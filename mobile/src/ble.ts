@@ -200,33 +200,64 @@ export function monitorFingerprintEvents(
   const m = getBleManager();
   if (!m) return { remove: () => {} };
 
-  try {
-    return m.monitorCharacteristicForDevice(
-      deviceId,
-      SERVICE_UUID,
-      EVENT_CHAR_UUID,
-      (error, characteristic) => {
-        if (error) {
-          if (error.message !== "Operation was cancelled") {
-            console.warn("Fingerprint monitoring error:", error.message);
-          }
-          return;
-        }
-        if (characteristic?.value) {
-          try {
-            const decoded = decodeBase64(characteristic.value);
-            const eventData = JSON.parse(decoded);
-            onEvent(eventData);
-          } catch (e) {
-            console.warn("Failed to parse event data", e);
-          }
-        }
+  let isRemoved = false;
+  let subscription: any = null;
+  let retryTimeout: any = null;
+
+  const start = async () => {
+    if (isRemoved) return;
+    try {
+      const connected = await m.isDeviceConnected(deviceId);
+      if (!connected) {
+        retryTimeout = setTimeout(start, 2000);
+        return;
       }
-    );
-  } catch (err) {
-    console.warn("Failed to subscribe to fingerprint characteristic", err);
-    return { remove: () => {} };
-  }
+      
+      subscription = m.monitorCharacteristicForDevice(
+        deviceId,
+        SERVICE_UUID,
+        EVENT_CHAR_UUID,
+        (error, characteristic) => {
+          if (error) {
+            if (error.message !== "Operation was cancelled") {
+              console.warn("Fingerprint monitoring error:", error.message);
+              // Retry monitoring after a small delay in case of transient disconnect
+              if (!isRemoved) {
+                if (retryTimeout) clearTimeout(retryTimeout);
+                retryTimeout = setTimeout(start, 2000);
+              }
+            }
+            return;
+          }
+          if (characteristic?.value) {
+            try {
+              const decoded = decodeBase64(characteristic.value);
+              const eventData = JSON.parse(decoded);
+              onEvent(eventData);
+            } catch (e) {
+              console.warn("Failed to parse event data", e);
+            }
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("Failed to subscribe to fingerprint characteristic", err);
+      if (!isRemoved) {
+        if (retryTimeout) clearTimeout(retryTimeout);
+        retryTimeout = setTimeout(start, 2000);
+      }
+    }
+  };
+
+  start();
+
+  return {
+    remove: () => {
+      isRemoved = true;
+      if (retryTimeout) clearTimeout(retryTimeout);
+      if (subscription) subscription.remove();
+    }
+  };
 }
 
 export async function resetFingerprintMemory(deviceId: string): Promise<boolean> {

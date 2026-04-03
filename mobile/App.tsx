@@ -50,10 +50,12 @@ function MainApp() {
   useEffect(() => {
     const hydrate = async () => {
       try {
+        let loadedUser = user;
         const local = await AsyncStorage.getItem(STORAGE_KEY);
         if (local) {
           const parsed = JSON.parse(local) as ApiState;
-          setUser(parsed.user ?? DEFAULT_USER);
+          loadedUser = parsed.user ?? DEFAULT_USER;
+          setUser(loadedUser);
           setUsersList(parsed.usersList ?? INITIAL_USERS);
           setFingerprints(parsed.fingerprints ?? INITIAL_FINGERPRINTS);
         }
@@ -62,7 +64,7 @@ function MainApp() {
         if (lastId) {
           setConnectedDeviceId(lastId);
           setIsAutoConnecting(false);
-          setScreen(user.password ? "fingerprintVerification" : "dashboard");
+          setScreen(loadedUser.password ? "fingerprintVerification" : "dashboard");
         }
       } catch (error) {
         console.warn("Failed loading local state", error);
@@ -71,7 +73,7 @@ function MainApp() {
       }
     };
     hydrate();
-  }, [user.password]);
+  }, []);
 
   // Global Bluetooth Background Manager
   useEffect(() => {
@@ -80,12 +82,14 @@ function MainApp() {
     if (!m) return;
     
     let isMounted = true;
+    let retryTimeout: ReturnType<typeof setTimeout>;
     
     const connectSilently = async () => {
+       if (!isMounted) return;
        try {
           const isConn = await m.isDeviceConnected(connectedDeviceId);
           if (!isConn) {
-             const d = await m.connectToDevice(connectedDeviceId, { autoConnect: true });
+             const d = await m.connectToDevice(connectedDeviceId);
              await d.discoverAllServicesAndCharacteristics();
              const { Platform } = require('react-native');
              if (Platform.OS === 'android') await d.requestMTU(512);
@@ -94,23 +98,28 @@ function MainApp() {
              const me = devices.find(x => x.id === connectedDeviceId);
              if (me) await me.discoverAllServicesAndCharacteristics();
           }
-       } catch (error) {
-          console.warn("Silently retrying background connection...", error);
+       } catch (error: any) {
+          // Expected behavior if ESP32 is powered off or out of range. 
+          // We suppress the warning flood and just schedule a manual retry.
+          if (isMounted) {
+            retryTimeout = setTimeout(connectSilently, 5000);
+          }
        }
     };
     
     connectSilently();
     
-    // Automatically reconnect forever if it drops
+    // Automatically reconnect if it drops after a successful connection
     const sub = m.onDeviceDisconnected(connectedDeviceId, () => {
       if (isMounted) {
-         setTimeout(connectSilently, 2000);
+         retryTimeout = setTimeout(connectSilently, 2000);
       }
     });
     
     return () => {
       isMounted = false;
       sub.remove();
+      if (retryTimeout) clearTimeout(retryTimeout);
     };
   }, [connectedDeviceId]);
 
