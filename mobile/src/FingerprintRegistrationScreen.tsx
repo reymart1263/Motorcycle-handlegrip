@@ -7,13 +7,12 @@ type Props = {
   deviceId: string | null;
   nextSlot?: number;
   onBack: () => void;
-  onSkip: () => void;
   onRegister: (fp: { id: string; slot: number; name: string; userId: string }) => void;
 };
 
 type EnrollmentStep = 'idle' | 'starting' | 'place_finger' | 'remove_finger' | 'step2' | 'success' | 'error';
 
-export function FingerprintRegistrationScreen({ deviceId, nextSlot = 1, onBack, onSkip, onRegister }: Props) {
+export function FingerprintRegistrationScreen({ deviceId, nextSlot = 1, onBack, onRegister }: Props) {
   const [step, setStep] = useState<EnrollmentStep>('idle');
   const [statusMessage, setStatusMessage] = useState('Ready to begin');
   const [isRegistering, setIsRegistering] = useState(false);
@@ -111,12 +110,6 @@ export function FingerprintRegistrationScreen({ deviceId, nextSlot = 1, onBack, 
         {!isRegistering && step !== 'success' && (
           <Pressable style={styles.button} onPress={handleStart}>
             <Text style={styles.buttonText}>{step === 'idle' ? 'Start Registration' : 'Try Again'}</Text>
-          </Pressable>
-        )}
-        
-        {!isRegistering && (
-          <Pressable style={styles.ghostButton} onPress={onSkip}>
-            <Text style={styles.ghostButtonText}>Skip for now</Text>
           </Pressable>
         )}
       </View>

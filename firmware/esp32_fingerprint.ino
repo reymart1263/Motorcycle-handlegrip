@@ -144,6 +144,7 @@ void setup() {
   Serial.begin(115200);
   
   // Fingerprint sensor
+  mySerial.begin(57600, SERIAL_8N1, FINGERPRINT_RX, FINGERPRINT_TX);
   finger.begin(57600);
   if (finger.verifyPassword()) {
     Serial.println("Found ZW101 fingerprint sensor!");
@@ -188,7 +189,7 @@ void loop() {
   // --- Reconnection Logic ---
   if (!deviceConnected && oldDeviceConnected) {
     delay(500); // Give the local bluetooth stack time to clean up
-    pServer->startAdvertising(); // restart advertising
+    BLEDevice::startAdvertising(); // restart advertising globally with exact same config
     Serial.println("Bluetooth advertising restarted");
     oldDeviceConnected = deviceConnected;
   }
@@ -210,14 +211,13 @@ void loop() {
     if (p == FINGERPRINT_OK) {
       p = finger.fingerFastSearch();
       if (p == FINGERPRINT_OK) {
-        StaticJsonDocument<100> doc;
-        doc["verified"] = true;
-        doc["id"] = finger.fingerID;
-        String output;
-        serializeJson(doc, output);
-        sendEvent(output);
+        sendStatus("verify_ok", finger.fingerID);
+        delay(2000); // Wait 2s to prevent BLE queue flood
+      } else if (p == FINGERPRINT_NOTFOUND) {
+        sendStatus("verify_fail");
+        delay(1000); // Wait before scanning again
       }
     }
   }
-  delay(10); // Reduced delay for faster sensor response
+  delay(50); // Small base delay for loop stability
 }

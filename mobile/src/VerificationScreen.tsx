@@ -1,15 +1,16 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { monitorFingerprintEvents } from './ble';
 
 type Props = {
   deviceId: string | null;
-  onBack: () => void;
   onVerified: () => void;
 };
 
-export function VerificationScreen({ deviceId, onBack, onVerified }: Props) {
+export function VerificationScreen({ deviceId, onVerified }: Props) {
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   useEffect(() => {
     if (!deviceId) return;
 
@@ -21,7 +22,10 @@ export function VerificationScreen({ deviceId, onBack, onVerified }: Props) {
         event.event === 'match_ok' || 
         event.event === 'verify_ok'
       ) {
+        setErrorMsg(null);
         onVerified();
+      } else if (event.event === 'verify_fail') {
+        setErrorMsg("Fingerprint not recognized. Please try again.");
       }
     });
 
@@ -33,19 +37,16 @@ export function VerificationScreen({ deviceId, onBack, onVerified }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={onBack} hitSlop={10} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#111" />
-        </Pressable>
         <Text style={styles.headerTitle}>Verification</Text>
       </View>
 
       <View style={styles.content}>
-        <View style={styles.iconCircle}>
-          <Ionicons name="finger-print" size={56} color="#d4d4d8" />
+        <View style={[styles.iconCircle, errorMsg ? styles.iconError : null]}>
+          <Ionicons name="finger-print" size={56} color={errorMsg ? "#ef4444" : "#d4d4d8"} />
         </View>
         <Text style={styles.title}>Verify Identity</Text>
         <Text style={styles.subtitle}>
-          Place your registered finger on the sensor to access the homepage.
+          {errorMsg ? errorMsg : "Place your registered finger on the sensor to access the homepage."}
         </Text>
       </View>
 
@@ -91,6 +92,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 24,
+  },
+  iconError: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
   },
   title: {
     fontSize: 24,

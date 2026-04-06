@@ -124,7 +124,7 @@ export async function connectToDevice(deviceId: string): Promise<boolean> {
   if (!m) return false;
   try {
     m.stopDeviceScan();
-    const device = await m.connectToDevice(deviceId);
+    const device = await m.connectToDevice(deviceId, { autoConnect: true });
     await device.discoverAllServicesAndCharacteristics();
     
     // Request a larger MTU to handle JSON strings larger than 20 bytes
@@ -136,6 +136,19 @@ export async function connectToDevice(deviceId: string): Promise<boolean> {
   } catch (err) {
     console.error("Failed to connect", err);
     return false;
+  }
+}
+
+export async function disconnectDevice(deviceId: string): Promise<void> {
+  const m = getBleManager();
+  if (!m) return;
+  try {
+    const isConn = await m.isDeviceConnected(deviceId);
+    if (isConn) {
+      await m.cancelDeviceConnection(deviceId);
+    }
+  } catch (e) {
+    console.warn("Failed to disconnect", e);
   }
 }
 

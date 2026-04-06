@@ -24,7 +24,7 @@ import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
 import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
 import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
 import { DashboardScreen } from "./src/DashboardScreen";
-import { deleteFingerprint, scanAndConnect, resetFingerprintMemory } from "./src/ble";
+import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice } from "./src/ble";
 
 const STORAGE_KEY = "grip_mobile_app_state";
 const DEVICE_KEY = "grip_last_device_id";
@@ -51,20 +51,26 @@ function MainApp() {
     const hydrate = async () => {
       try {
         let loadedUser = user;
+        let loadedFingerprints = INITIAL_FINGERPRINTS;
         const local = await AsyncStorage.getItem(STORAGE_KEY);
         if (local) {
           const parsed = JSON.parse(local) as ApiState;
           loadedUser = parsed.user ?? DEFAULT_USER;
           setUser(loadedUser);
           setUsersList(parsed.usersList ?? INITIAL_USERS);
-          setFingerprints(parsed.fingerprints ?? INITIAL_FINGERPRINTS);
+          loadedFingerprints = parsed.fingerprints ?? INITIAL_FINGERPRINTS;
+          setFingerprints(loadedFingerprints);
         }
 
         const lastId = await AsyncStorage.getItem(DEVICE_KEY);
         if (lastId) {
           setConnectedDeviceId(lastId);
           setIsAutoConnecting(false);
-          setScreen(loadedUser.password ? "fingerprintVerification" : "dashboard");
+          if (loadedFingerprints.length > 0) {
+            setScreen("fingerprintVerification");
+          } else {
+            setScreen("hotspot");
+          }
         }
       } catch (error) {
         console.warn("Failed loading local state", error);
@@ -89,7 +95,7 @@ function MainApp() {
        try {
           const isConn = await m.isDeviceConnected(connectedDeviceId);
           if (!isConn) {
-             const d = await m.connectToDevice(connectedDeviceId);
+             const d = await m.connectToDevice(connectedDeviceId, { autoConnect: true });
              await d.discoverAllServicesAndCharacteristics();
              const { Platform } = require('react-native');
              if (Platform.OS === 'android') await d.requestMTU(512);
@@ -155,6 +161,7 @@ function MainApp() {
           onPress: async () => {
             if (connectedDeviceId) {
               await resetFingerprintMemory(connectedDeviceId);
+              await disconnectDevice(connectedDeviceId);
             }
             await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
             setUser(DEFAULT_USER);
@@ -240,7 +247,6 @@ function MainApp() {
             deviceId={connectedDeviceId}
             nextSlot={getNextSlot()}
             onBack={() => setScreen(isFromDashboard ? "dashboard" : "hotspot")}
-            onSkip={() => setScreen(isFromDashboard ? "dashboard" : "passwordCreation")}
             onRegister={registerFingerprint}
           />
         )}
@@ -288,7 +294,6 @@ function MainApp() {
         {screen === "fingerprintVerification" && (
           <VerificationScreen
             deviceId={connectedDeviceId}
-            onBack={() => setScreen("hotspot")}
             onVerified={() => setScreen("dashboard")}
           />
         )}
