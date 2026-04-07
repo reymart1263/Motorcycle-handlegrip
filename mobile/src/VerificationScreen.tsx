@@ -5,10 +5,11 @@ import { monitorFingerprintEvents } from './ble';
 
 type Props = {
   deviceId: string | null;
+  userEmail?: string;
   onVerified: () => void;
 };
 
-export function VerificationScreen({ deviceId, onVerified }: Props) {
+export function VerificationScreen({ deviceId, userEmail, onVerified }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -26,6 +27,8 @@ export function VerificationScreen({ deviceId, onVerified }: Props) {
         onVerified();
       } else if (event.event === 'verify_fail') {
         setErrorMsg("Fingerprint not recognized. Please try again.");
+      } else if (event.event === 'intrusion_alert') {
+        setErrorMsg("Too many invalid attempts! Alert issued by hardware.");
       }
     });
 

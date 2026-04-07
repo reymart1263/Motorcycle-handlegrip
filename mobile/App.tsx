@@ -24,7 +24,7 @@ import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
 import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
 import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
 import { DashboardScreen } from "./src/DashboardScreen";
-import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice } from "./src/ble";
+import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice, sendBleCommand } from "./src/ble";
 
 const STORAGE_KEY = "grip_mobile_app_state";
 const DEVICE_KEY = "grip_last_device_id";
@@ -160,7 +160,7 @@ function MainApp() {
           style: "destructive",
           onPress: async () => {
             if (connectedDeviceId) {
-              await resetFingerprintMemory(connectedDeviceId);
+              await sendBleCommand(connectedDeviceId, { cmd: 'full_reset' });
               await disconnectDevice(connectedDeviceId);
             }
             await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
@@ -234,6 +234,7 @@ function MainApp() {
         {screen === "hotspot" && (
           <HotspotScreen
             deviceId={connectedDeviceId}
+            userEmail={user.email}
             onBack={() => setScreen("bluetooth")}
             onNext={() => {
               setIsFromDashboard(false);
@@ -294,6 +295,7 @@ function MainApp() {
         {screen === "fingerprintVerification" && (
           <VerificationScreen
             deviceId={connectedDeviceId}
+            userEmail={user.email}
             onVerified={() => setScreen("dashboard")}
           />
         )}

@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Alert, TextInput } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
 import { User, FingerprintData } from './types';
-import { listFingerprints, monitorFingerprintEvents } from './ble';
+import { listFingerprints, monitorFingerprintEvents, sendBleCommand } from './ble';
 
 type Props = {
   user: User;
@@ -21,30 +20,36 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
   const [hwCount, setHwCount] = useState<number | null>(null);
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(user.name);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState(user.email);
   const [location, setLocation] = useState<{ lat: number, lon: number } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const handleTrackLocation = async () => {
     setIsLocating(true);
-    try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Allow location access to track your motorcycle.');
-        setIsLocating(false);
-        return;
-      }
+    if (!deviceId) {
+      Alert.alert('Not Connected', 'Motorcycle is not currently connected.');
+      setIsLocating(false);
+      return;
+    }
 
-      let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLocation({ 
-        lat: loc.coords.latitude, 
-        lon: loc.coords.longitude 
-      });
-    } catch (error) {
-      console.warn(error);
-      Alert.alert('Error', 'Could not fetch current location.');
-    } finally {
+    const success = await sendBleCommand(deviceId, { cmd: 'get_location' });
+    if (!success) {
+      Alert.alert('Error', 'Could not send command to motorcycle.');
       setIsLocating(false);
     }
+
+    // Timeout if no response after 8 seconds
+    setTimeout(() => {
+      setIsLocating((prev) => {
+        if (prev) {
+          Alert.alert('Timeout', 'No response from GPS module. Check wiring or wait for satellite fix.');
+          return false;
+        }
+        return prev;
+      });
+    }, 8000);
   };
 
   const handleEditSave = () => {
@@ -56,6 +61,45 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
     } else {
       setNameDraft(user.name);
       setIsEditingName(true);
+    }
+  };
+
+  const handleEmailSave = () => {
+    if (isEditingEmail) {
+      if (emailDraft.trim() && emailDraft !== user.email && onUpdateUser) {
+        onUpdateUser({ ...user, email: emailDraft.trim() });
+      }
+      setIsEditingEmail(false);
+    } else {
+      setEmailDraft(user.email);
+      setIsEditingEmail(true);
+    }
+  };
+
+  const handleSyncToHardware = async () => {
+    if (!deviceId) {
+      Alert.alert('Not Connected', 'Connect to your motorcycle via Bluetooth first.');
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      // We send a special command to sync time and email
+      const success = await sendBleCommand(deviceId, { 
+        cmd: 'sync_settings', 
+        email: user.email,
+        time: nowEpoch
+      });
+      
+      if (success) {
+        Alert.alert('Success', 'Settings & Time synced to motorcycle lock.');
+      } else {
+        Alert.alert('Error', 'Sync failed. Try moving closer to the bike.');
+      }
+    } catch (e) {
+      Alert.alert('Error', 'Failed to sync.');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -72,6 +116,12 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
         if (onUpdateFingerprints) onUpdateFingerprints([]);
       } else if (event.event === 'delete_ok') {
         setHwCount(prev => (prev && prev > 0) ? prev - 1 : 0);
+      } else if (event.event === 'location') {
+        setLocation({ lat: event.lat, lon: event.lon });
+        setIsLocating(false);
+      } else if (event.event === 'location_fail') {
+        Alert.alert('GPS Status', event.reason || 'No GPS fix yet.');
+        setIsLocating(false);
       }
     });
 
@@ -84,8 +134,7 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
   }, [deviceId]);
 
   useEffect(() => {
-    // Initial location check
-    handleTrackLocation();
+    // Location will be checked manually through user interaction instead of automatically on load.
   }, []);
 
   const confirmDelete = (fp: FingerprintData) => {
@@ -163,9 +212,37 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
               <MaterialCommunityIcons name={isEditingName ? "check" : "pencil"} size={16} color={isEditingName ? "#10b981" : "#d4d4d8"} />
             </Pressable>
           </View>
-          <Text style={styles.userEmailText}>{user.email || 'almorfe.paulo@gmail.com'}</Text>
+          <View style={styles.nameRow}>
+            {isEditingEmail ? (
+              <TextInput
+                style={styles.emailInput}
+                value={emailDraft}
+                onChangeText={setEmailDraft}
+                autoFocus
+                onSubmitEditing={handleEmailSave}
+                returnKeyType="done"
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+            ) : (
+              <Text style={styles.userEmailText}>{user.email || 'almorfe.paulo@gmail.com'}</Text>
+            )}
+            <Pressable style={styles.editIcon} onPress={handleEmailSave} hitSlop={10}>
+              <MaterialCommunityIcons name={isEditingEmail ? "check" : "pencil"} size={14} color={isEditingEmail ? "#10b981" : "#d4d4d8"} />
+            </Pressable>
+          </View>
         </View>
       </View>
+
+      {/* Hardware Sync Action */}
+      <Pressable 
+        style={[styles.syncButton, isSyncing && { opacity: 0.7 }]} 
+        onPress={handleSyncToHardware}
+        disabled={isSyncing}
+      >
+        <Ionicons name="sync" size={18} color="#71717a" />
+        <Text style={styles.syncButtonText}>{isSyncing ? 'Syncing...' : 'Sync Time & Email to Bike'}</Text>
+      </Pressable>
 
       {/* Fingerprint Access */}
       <View style={[styles.sectionHeader, { marginTop: 24 }]}>
@@ -323,7 +400,30 @@ const styles = StyleSheet.create({
   userEmailText: {
     fontSize: 13,
     color: '#a1a1aa',
-    marginTop: 4,
+  },
+  emailInput: {
+    fontSize: 13,
+    color: '#18181b',
+    padding: 0,
+    margin: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: '#d4d4d8',
+    minWidth: 150,
+  },
+  syncButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f4f4f5',
+    borderRadius: 16,
+    paddingVertical: 12,
+    gap: 8,
+    marginBottom: 8,
+  },
+  syncButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#71717a',
   },
   fpCard: {
     flexDirection: 'row',

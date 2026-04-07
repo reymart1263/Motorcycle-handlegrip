@@ -152,12 +152,12 @@ export async function disconnectDevice(deviceId: string): Promise<void> {
   }
 }
 
-export async function sendWifiCredentials(deviceId: string, ssid: string, pass: string): Promise<boolean> {
+export async function sendWifiCredentials(deviceId: string, ssid: string, pass: string, email: string): Promise<boolean> {
   const m = getBleManager();
   if (!m) return false;
 
   try {
-    const payload = JSON.stringify({ s: ssid, p: pass });
+    const payload = JSON.stringify({ s: ssid, p: pass, e: email });
     const base64Data = encodeBase64(payload);
     
     await m.writeCharacteristicWithResponseForDevice(

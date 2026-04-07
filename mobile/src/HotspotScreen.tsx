@@ -12,11 +12,12 @@ import { sendWifiCredentials, monitorFingerprintEvents } from "./ble";
 
 type Props = {
   deviceId: string | null;
+  userEmail: string;
   onBack: () => void;
   onNext: () => void;
 };
 
-export function HotspotScreen({ deviceId, onBack, onNext }: Props) {
+export function HotspotScreen({ deviceId, userEmail, onBack, onNext }: Props) {
   const [wifiEnabled, setWifiEnabled] = useState(true);
   const [ssid, setSsid] = useState("");
   const [password, setPassword] = useState("");
@@ -91,7 +92,8 @@ export function HotspotScreen({ deviceId, onBack, onNext }: Props) {
             return;
           }
 
-          const success = await sendWifiCredentials(deviceId, ssid, password);
+          const payloadEmail = userEmail || "johndoe@example.com";
+          const success = await sendWifiCredentials(deviceId, ssid, password, payloadEmail);
           if (success) {
             import("react-native").then(rn => rn.Alert.alert("Success", "Hotspot credentials sent!"));
             onNext();
