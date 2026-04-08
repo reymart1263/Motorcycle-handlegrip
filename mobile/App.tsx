@@ -24,7 +24,7 @@ import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
 import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
 import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
 import { DashboardScreen } from "./src/DashboardScreen";
-import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice, sendBleCommand } from "./src/ble";
+import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice, sendBleCommand, stopBleScan, listFingerprints, monitorFingerprintEvents, fetchIdentity, saveIdentity, setMasterPass, enrollFingerprint } from "./src/ble";
 
 const STORAGE_KEY = "grip_mobile_app_state";
 const DEVICE_KEY = "grip_last_device_id";
@@ -46,6 +46,7 @@ function MainApp() {
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null);
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
   const [isFromDashboard, setIsFromDashboard] = useState(false);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
 
   useEffect(() => {
     const hydrate = async () => {
@@ -66,11 +67,9 @@ function MainApp() {
         if (lastId) {
           setConnectedDeviceId(lastId);
           setIsAutoConnecting(false);
-          if (loadedFingerprints.length > 0) {
-            setScreen("fingerprintVerification");
-          } else {
-            setScreen("hotspot");
-          }
+          // Always default to verification if we have a paired device
+          // This forces a hardware check for existing fingerprints
+          setScreen("fingerprintVerification");
         }
       } catch (error) {
         console.warn("Failed loading local state", error);
@@ -86,48 +85,99 @@ function MainApp() {
     if (!connectedDeviceId) return;
     const m = getBleManager();
     if (!m) return;
-    
+
     let isMounted = true;
     let retryTimeout: ReturnType<typeof setTimeout>;
-    
+
     const connectSilently = async () => {
-       if (!isMounted) return;
-       try {
-          const isConn = await m.isDeviceConnected(connectedDeviceId);
-          if (!isConn) {
-             const d = await m.connectToDevice(connectedDeviceId, { autoConnect: true });
-             await d.discoverAllServicesAndCharacteristics();
-             const { Platform } = require('react-native');
-             if (Platform.OS === 'android') await d.requestMTU(512);
-          } else {
-             const devices = await m.connectedDevices([SERVICE_UUID]);
-             const me = devices.find(x => x.id === connectedDeviceId);
-             if (me) await me.discoverAllServicesAndCharacteristics();
+      if (!isMounted) return;
+      try {
+        const isConn = await m.isDeviceConnected(connectedDeviceId);
+        if (isConn) {
+          // Already connected — just discover services
+          const devices = await m.connectedDevices([SERVICE_UUID]);
+          const me = devices.find(x => x.id === connectedDeviceId);
+          if (me) await me.discoverAllServicesAndCharacteristics();
+          return;
+        }
+
+        // Not connected — scan by name (MAC-randomization-safe)
+        scanAndConnect(
+          'Motorcycle',
+          (freshId) => {
+            if (!isMounted) return;
+            // Update stored ID if Android assigned a new MAC
+            if (freshId !== connectedDeviceId) {
+              setConnectedDeviceId(freshId);
+              AsyncStorage.setItem(DEVICE_KEY, freshId);
+            }
+          },
+          () => {
+            // Timeout — retry after 10s
+            if (isMounted) {
+              retryTimeout = setTimeout(connectSilently, 10000);
+            }
           }
-       } catch (error: any) {
-          // Expected behavior if ESP32 is powered off or out of range. 
-          // We suppress the warning flood and just schedule a manual retry.
-          if (isMounted) {
-            retryTimeout = setTimeout(connectSilently, 5000);
-          }
-       }
+        );
+      } catch (error: any) {
+        if (isMounted) {
+          retryTimeout = setTimeout(connectSilently, 5000);
+        }
+      }
     };
-    
+
     connectSilently();
-    
-    // Automatically reconnect if it drops after a successful connection
+
+    // Reconnect if it drops
     const sub = m.onDeviceDisconnected(connectedDeviceId, () => {
       if (isMounted) {
-         retryTimeout = setTimeout(connectSilently, 2000);
+        retryTimeout = setTimeout(connectSilently, 2000);
       }
     });
-    
+
     return () => {
       isMounted = false;
       sub.remove();
       if (retryTimeout) clearTimeout(retryTimeout);
     };
   }, [connectedDeviceId]);
+
+  // Global Hardware Identity Sync Listener
+  useEffect(() => {
+    if (!connectedDeviceId) return;
+    
+    const sub = monitorFingerprintEvents(connectedDeviceId, (event) => {
+      if (event.event === "identity") {
+        console.log("[SYNC] Received Identity Bundle from Lock:", event);
+        
+        // Sync User Info if empty locally
+        if (event.name && user.name === DEFAULT_USER.name) {
+          setUser(prev => ({ ...prev, name: event.name, email: event.email }));
+        }
+
+        // Sync Fingerprint Labels if empty locally
+        if (event.fp_names && fingerprints.length === 0) {
+           try {
+             const mapping = JSON.parse(event.fp_names);
+             if (Array.isArray(mapping)) {
+               const transformed: FingerprintData[] = mapping.map((m: any) => ({
+                 id: m.s.toString(),
+                 name: m.n,
+                 slot: m.s,
+                 userId: '1'
+               }));
+               setFingerprints(transformed);
+             }
+           } catch(e) {
+             console.error("[SYNC] Identity Parse Error", e);
+           }
+        }
+      }
+    });
+
+    return () => sub.remove();
+  }, [connectedDeviceId, fingerprints.length, user.name]);
+
 
   useEffect(() => {
     if (loading) return;
@@ -136,80 +186,63 @@ function MainApp() {
     pushRemoteState(payload);
   }, [loading, user, usersList, fingerprints]);
 
-  const registerFingerprint = (newFp: FingerprintData) => {
-    setFingerprints((prev) => [...prev, newFp]);
-    setScreen("fingerprintNaming");
+  const registerFingerprint = async (newFp: FingerprintData) => {
+    if (connectedDeviceId) {
+      const success = await enrollFingerprint(connectedDeviceId, newFp.slot, tempPassword || undefined);
+      if (success) {
+        setFingerprints((prev) => [...prev, newFp]);
+        setScreen("fingerprintNaming");
+      } else {
+        Alert.alert("Hardware Error", "Enrollment failed. Ensure your finger is on the sensor.");
+      }
+    }
+    setTempPassword(null);
   };
 
+  const deleteWithPass = async (id: string, slot: number, pass: string) => {
+    if (connectedDeviceId) {
+      const success = await deleteFingerprint(connectedDeviceId, slot, pass);
+      if (success) {
+        setFingerprints(prev => prev.filter(f => f.id !== id));
+      } else {
+        Alert.alert("Error", "Incorrect Password or Hardware Error");
+      }
+    }
+  };
+
+  const resetWithPass = async (pass: string) => {
+    if (connectedDeviceId) {
+      const success = await resetFingerprintMemory(connectedDeviceId, pass);
+      if (success) {
+        setFingerprints([]);
+        Alert.alert("Success", "Hardware fingerprints cleared.");
+      } else {
+        Alert.alert("Error", "Incorrect Password or Hardware Error");
+      }
+    }
+  };
+
+  const fullResetWithPass = async (pass: string) => {
+    if (connectedDeviceId) {
+      const success = await sendBleCommand(connectedDeviceId, { cmd: 'full_reset', pass });
+      if (success) {
+        await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
+        setUser(DEFAULT_USER);
+        setFingerprints([]);
+        setConnectedDeviceId(null);
+        setIsFromDashboard(false);
+        setScreen("setup");
+      } else {
+        Alert.alert("Error", "Incorrect Password or Hardware Error");
+      }
+    }
+  };
   const getNextSlot = () => {
     let next = 1;
     while (fingerprints.some(f => f.slot === next)) {
       next++;
     }
     return next;
-  };
-
-  const handleFullSystemReset = async () => {
-    Alert.alert(
-      "SYSTEM RESET",
-      "This will wipe ALL fingerprints from the sensor and RESET the entire app. Are you sure?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "RESET EVERYTHING",
-          style: "destructive",
-          onPress: async () => {
-            if (connectedDeviceId) {
-              await sendBleCommand(connectedDeviceId, { cmd: 'full_reset' });
-              await disconnectDevice(connectedDeviceId);
-            }
-            await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
-            setUser(DEFAULT_USER);
-            setFingerprints([]);
-            setConnectedDeviceId(null);
-            setIsFromDashboard(false);
-            setScreen("setup");
-          }
-        }
-      ]
-    );
-  };
-
-  const deleteFingerprintLogic = async (id: string, slot: number) => {
-    if (connectedDeviceId) {
-      try {
-        const success = await deleteFingerprint(connectedDeviceId, slot);
-        if (!success) {
-          Alert.alert("Hardware error", "Could not remove fingerprint from the sensor. It might already be gone.");
-        }
-      } catch (e) {
-        console.warn("Failed to send delete command", e);
-      }
-    }
-    
-    setFingerprints((prev) => prev.filter((fp) => fp.id !== id));
-  };
-
-  const handleResetHardware = async () => {
-    if (!connectedDeviceId) return;
-    Alert.alert(
-      "WIPE HARDWARE",
-      "This will remove ALL fingerprints from the physical sensor. Continue?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "WIPE",
-          style: "destructive",
-          onPress: async () => {
-            const success = await resetFingerprintMemory(connectedDeviceId);
-            if (success) {
-              setFingerprints([]);
-              Alert.alert("Success", "Hardware memory cleared.");
-            }
-          }
-        }
-      ]
-    );
   };
 
   return (
@@ -223,10 +256,44 @@ function MainApp() {
         {screen === "bluetooth" && (
           <BluetoothPairingScreen
             onBack={() => setScreen("setup")}
-            onNext={(deviceId) => {
+            onNext={async (deviceId) => {
               setConnectedDeviceId(deviceId);
-              AsyncStorage.setItem(DEVICE_KEY, deviceId);
-              setScreen("hotspot");
+              await AsyncStorage.setItem(DEVICE_KEY, deviceId);
+              
+              setLoading(true);
+              try {
+                // Monitor for the 'count' event from ESP32
+                const sub = monitorFingerprintEvents(deviceId, (event) => {
+                  if (event.event === "count") {
+                    sub.remove();
+                    setLoading(false);
+                    if (event.total > 0) {
+                      // Hardware has fingerprints! 
+                      // Force verification even if this phone is "new"
+                      setScreen("fingerprintVerification");
+                    } else {
+                      // No fingerprints, proceed to setup
+                      setScreen("hotspot");
+                    }
+                  }
+                });
+
+                // Request the count and the Identity bundle
+                await listFingerprints(deviceId);
+                await fetchIdentity(deviceId);
+
+                // Timeout safety: if ESP32 doesn't respond in 4s, proceed anyway
+                setTimeout(() => {
+                  sub.remove();
+                  setLoading(false);
+                  // Check if we are still on loading/bluetooth state
+                  // If we didn't transition yet, default to hotspot
+                  setScreen((current) => current === "bluetooth" ? "hotspot" : current);
+                }, 4000);
+              } catch (e) {
+                setLoading(false);
+                setScreen("hotspot");
+              }
             }}
           />
         )}
@@ -264,7 +331,14 @@ function MainApp() {
               setFingerprints((prev) => {
                 const copy = [...prev];
                 const target = copy[copy.length - 1];
-                copy[copy.length - 1] = { ...target, name: nameDraft.trim() };
+                const updated = { ...target, name: nameDraft.trim() };
+                copy[copy.length - 1] = updated;
+                
+                // Push update to hardware (Single Source of Truth)
+                if (connectedDeviceId) {
+                  saveIdentity(connectedDeviceId, user.name, copy);
+                }
+                
                 return copy;
               });
               setScreen(nextScreen);
@@ -277,6 +351,9 @@ function MainApp() {
             onBack={() => setScreen("setup")}
             onNext={(password) => {
               setUser((prev) => ({ ...prev, password }));
+              if (connectedDeviceId) {
+                setMasterPass(connectedDeviceId, password);
+              }
               setScreen("emailRegistration");
             }}
           />
@@ -286,7 +363,11 @@ function MainApp() {
           <EmailRegistrationScreen
             onBack={() => setScreen("passwordCreation")}
             onNext={(email) => {
-              setUser((prev) => ({ ...prev, email }));
+              const updatedUser = { ...user, email };
+              setUser(updatedUser);
+              if (connectedDeviceId) {
+                saveIdentity(connectedDeviceId, user.name, fingerprints);
+              }
               setScreen("dashboard");
             }}
           />
@@ -297,6 +378,20 @@ function MainApp() {
             deviceId={connectedDeviceId}
             userEmail={user.email}
             onVerified={() => setScreen("dashboard")}
+            onReset={async () => {
+              // Disconnect from ESP32 FIRST so it stops advertising block
+              // and immediately starts re-advertising for pairing
+              if (connectedDeviceId) {
+                stopBleScan();
+                await disconnectDevice(connectedDeviceId);
+              }
+              await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
+              setUser(DEFAULT_USER);
+              setFingerprints([]);
+              setConnectedDeviceId(null);
+              setIsFromDashboard(false);
+              setScreen("setup");
+            }}
           />
         )}
 
@@ -305,13 +400,18 @@ function MainApp() {
             user={user}
             fingerprints={fingerprints}
             deviceId={connectedDeviceId}
-            onAddFingerprint={() => {
+            onAddFingerprint={() => {}} // Now handled by Modal in Dashboard
+            onRemoveFingerprint={() => {}}
+            onResetHardware={() => {}}
+            onSystemReset={() => {}}
+            onEnrollWithPassword={(pass) => {
+              setTempPassword(pass);
               setIsFromDashboard(true);
               setScreen("fingerprintRegistration");
             }}
-            onRemoveFingerprint={deleteFingerprintLogic}
-            onResetHardware={handleResetHardware}
-            onSystemReset={handleFullSystemReset}
+            onDeleteWithPassword={deleteWithPass}
+            onResetWithPassword={resetWithPass}
+            onFullResetWithPassword={fullResetWithPass}
             onUpdateFingerprints={setFingerprints}
             onUpdateUser={setUser}
           />

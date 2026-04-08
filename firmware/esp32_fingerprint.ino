@@ -77,7 +77,6 @@ Preferences    preferences; // To store WiFi credentials & MAC lock
 String storedSSID = "";
 String storedPASS = "";
 String storedEMAIL = "";
-String primaryMac = ""; // "XX:XX:XX:XX:XX:XX" format
 
 // ── BLE objects ───────────────────────────────────────────────────────────────
 BLEServer*         pServer              = nullptr;
@@ -257,7 +256,7 @@ void sendEmailAlert() {
 
   WiFiClientSecure client;
   client.setInsecure(); // FormSubmit https without certificate bundle tracking
-  client.setHandshakeTimeout(15000); 
+  client.setHandshakeTimeout(20000); 
   HTTPClient http;
 
   String url = "https://formsubmit.co/ajax/" + storedEMAIL;
@@ -267,11 +266,9 @@ void sendEmailAlert() {
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Accept", "application/json");
-    http.addHeader("User-Agent", "Mozilla/5.0 (ESP32; MotorcycleSecurity)");
-    http.addHeader("Origin", "https://motorcycle-security-app.com");
-    http.addHeader("Referer", "https://motorcycle-security-app.com/");
+    http.addHeader("User-Agent", "PostmanRuntime/7.29.0");
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(15000); 
+    http.setTimeout(20000); 
 
     String latStr = gpsReady() ? String(gps.location.lat(), 6) : "Unknown (No GPS Fix)";
     String lonStr = gpsReady() ? String(gps.location.lng(), 6) : "Unknown (No GPS Fix)";
@@ -336,25 +333,9 @@ void sendStatus(String event, int id = -1, int total = -1,
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t *param) override {
     String peerMac = macToString(param->connect.remote_bda);
-    Serial.print("[BLE] Connection attempt from: ");
+    Serial.print("[BLE] Connection from: ");
     Serial.println(peerMac);
-
-    if (primaryMac == "" || primaryMac == "00:00:00:00:00:00") {
-      primaryMac = peerMac;
-      preferences.putString("prim_mac", primaryMac);
-      Serial.println("[BLE] *** LOCKED TO NEW PRIMARY DEVICE: " + primaryMac + " ***");
-      deviceConnected = true;
-    } 
-    else if (peerMac == primaryMac) {
-      Serial.println("[BLE] Authorized Primary Device recognized.");
-      deviceConnected = true;
-    } 
-    else {
-      Serial.println("[BLE] !!! UNAUTHORIZED DEVICE BLOCKED (Disconnecting) !!!");
-      pServer->disconnect(param->connect.conn_id);
-      deviceConnected = false;
-      return; 
-    }
+    deviceConnected = true;
   }
 
   void onDisconnect(BLEServer* pServer) override {
@@ -398,9 +379,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     }
     else if (cmd == "full_reset") {
       finger.emptyDatabase();
-      primaryMac = "";
-      preferences.putString("prim_mac", "");
-      Serial.println("[SYSTEM] FULL RESET PERFORMED. Database cleared & Bluetooth Bond wiped.");
+      Serial.println("[SYSTEM] FULL RESET PERFORMED. Database cleared.");
       sendStatus("clear_ok"); // Mobile app listens for this to confirm reset
     }
     else if (cmd == "list") {
@@ -510,11 +489,9 @@ void setup() {
   storedSSID = preferences.getString("ssid", "");
   storedPASS = preferences.getString("pass", "");
   storedEMAIL = preferences.getString("email", "");
-  primaryMac = preferences.getString("prim_mac", "");
 
   Serial.println("[PREFS] Loaded SSID: " + (storedSSID == "" ? "None" : storedSSID));
   Serial.println("[PREFS] Loaded Email: " + (storedEMAIL == "" ? "None" : storedEMAIL));
-  Serial.println("[PREFS] Primary Device Lock: " + (primaryMac == "" ? "UNLOCKED (Ready for pairing)" : primaryMac));
 
   // ── Connect WiFi if available ───────────────────────────────────────────
   if (storedSSID != "") {
@@ -559,12 +536,7 @@ void setup() {
   Serial.println("[SERVO] SG90 attached on GPIO13 — starting LOCKED (0 deg)");
 
   // ── BLE ─────────────────────────────────────────────────────────────────
-  String deviceName = "Motorcycle - Setup";
-  if (primaryMac != "") {
-     deviceName = "Motorcycle Lock (Private)";
-  }
-  
-  BLEDevice::init(deviceName.c_str());
+  BLEDevice::init("Motorcycle Handlegrip");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 

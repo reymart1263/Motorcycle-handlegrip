@@ -14,17 +14,27 @@ type Props = {
   onSystemReset: () => void;
   onUpdateFingerprints?: (fingerprints: FingerprintData[]) => void;
   onUpdateUser?: (user: User) => void;
+  onEnrollWithPassword?: (password: string) => void;
+  onDeleteWithPassword?: (id: string, slot: number, password: string) => void;
+  onResetWithPassword?: (password: string) => void;
+  onFullResetWithPassword?: (password: string) => void;
 };
 
-export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onResetHardware, onSystemReset, onUpdateFingerprints, onUpdateUser }: Props) {
+export function DashboardScreen({ 
+  user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onResetHardware, onSystemReset, 
+  onUpdateFingerprints, onUpdateUser,
+  onEnrollWithPassword, onDeleteWithPassword, onResetWithPassword, onFullResetWithPassword
+}: Props) {
   const [hwCount, setHwCount] = useState<number | null>(null);
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(user.name);
   const [isEditingEmail, setIsEditingEmail] = useState(false);
   const [emailDraft, setEmailDraft] = useState(user.email);
-  const [location, setLocation] = useState<{ lat: number, lon: number } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [location, setLocation] = useState<{ lat: number, lon: number } | null>(null);
+  const [securityModal, setSecurityModal] = useState<{ visible: boolean; type: 'delete' | 'clear' | 'reset' | 'enroll'; data?: any }>({ visible: false, type: 'enroll' });
+  const [passInput, setPassInput] = useState('');
 
   const handleTrackLocation = async () => {
     setIsLocating(true);
@@ -84,20 +94,23 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
     setIsSyncing(true);
     try {
       const nowEpoch = Math.floor(Date.now() / 1000);
-      // We send a special command to sync time and email
-      const success = await sendBleCommand(deviceId, { 
+      // Sync Time & Email
+      await sendBleCommand(deviceId, { 
         cmd: 'sync_settings', 
         email: user.email,
         time: nowEpoch
       });
       
-      if (success) {
-        Alert.alert('Success', 'Settings & Time synced to motorcycle lock.');
-      } else {
-        Alert.alert('Error', 'Sync failed. Try moving closer to the bike.');
-      }
+      // Sync Identity (Name & Fingerprint Labels)
+      await sendBleCommand(deviceId, {
+        cmd: "set_identity", 
+        name: user.name, 
+        fp_names: JSON.stringify(fingerprints.map(f => ({ s: f.slot, n: f.name })))
+      });
+
+      Alert.alert('Success', 'Profile, Labels & Time synced to motorcycle lock.');
     } catch (e) {
-      Alert.alert('Error', 'Failed to sync.');
+      Alert.alert('Error', 'Sync failed.');
     } finally {
       setIsSyncing(false);
     }
@@ -137,19 +150,29 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
     // Location will be checked manually through user interaction instead of automatically on load.
   }, []);
 
+  const handleSecurityAction = () => {
+    const password = passInput.trim();
+    if (!password) {
+      Alert.alert("Required", "Please enter the system password.");
+      return;
+    }
+
+    if (securityModal.type === 'delete' && onDeleteWithPassword && securityModal.data) {
+      onDeleteWithPassword(securityModal.data.id, securityModal.data.slot, password);
+    } else if (securityModal.type === 'clear' && onResetWithPassword) {
+      onResetWithPassword(password);
+    } else if (securityModal.type === 'reset' && onFullResetWithPassword) {
+      onFullResetWithPassword(password);
+    } else if (securityModal.type === 'enroll' && onEnrollWithPassword) {
+      onEnrollWithPassword(password);
+    }
+
+    setSecurityModal({ ...securityModal, visible: false });
+    setPassInput('');
+  };
+
   const confirmDelete = (fp: FingerprintData) => {
-    Alert.alert(
-      "Remove Fingerprint",
-      `Are you sure you want to remove "${fp.name}" from your device and the sensor?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Remove", 
-          style: "destructive", 
-          onPress: () => onRemoveFingerprint(fp.id, fp.slot) 
-        }
-      ]
-    );
+    setSecurityModal({ visible: true, type: 'delete', data: fp });
   };
 
   return (
@@ -265,7 +288,7 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
       ))}
 
       {/* Add Fingerprint Button */}
-      <Pressable style={styles.addFpButton} onPress={onAddFingerprint}>
+      <Pressable style={styles.addFpButton} onPress={() => setSecurityModal({ visible: true, type: 'enroll' })}>
         <MaterialCommunityIcons name="plus" size={20} color="#a1a1aa" />
         <Text style={styles.addFpText}>Add Fingerprint</Text>
       </Pressable>
@@ -274,10 +297,10 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
 
       {/* Reset Options */}
       <View style={styles.resetContainer}>
-        <Pressable onPress={onResetHardware}>
+        <Pressable onPress={() => setSecurityModal({ visible: true, type: 'clear' })}>
           <Text style={styles.resetLink}>RESET FINGERPRINT MEMORY</Text>
         </Pressable>
-        <Pressable onPress={onSystemReset}>
+        <Pressable onPress={() => setSecurityModal({ visible: true, type: 'reset' })}>
           <Text style={styles.systemResetLink}>SYSTEM RESET (TESTING ONLY)</Text>
         </Pressable>
       </View>
@@ -285,6 +308,39 @@ export function DashboardScreen({ user, fingerprints, deviceId, onAddFingerprint
       {hwCount !== null && (
         <View style={styles.hwStatus}>
           <Text style={styles.hwStatusText}>Hardware Status: {hwCount} fingerprint(s) in ZW101</Text>
+        </View>
+      )}
+
+      {/* Security Password Modal */}
+      {securityModal.visible && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Security Verification</Text>
+            <Text style={styles.modalSub}>
+              {securityModal.type === 'delete' ? 'Confirm deletion of fingerprint' :
+               securityModal.type === 'enroll' ? 'Verification required to add new fingerprint' :
+               'Authorization required for memory reset'} 
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Enter System Password"
+              secureTextEntry
+              value={passInput}
+              onChangeText={setPassInput}
+              autoFocus
+            />
+            <View style={styles.modalButtons}>
+              <Pressable 
+                style={styles.modalCancel} 
+                onPress={() => { setSecurityModal({ ...securityModal, visible: false }); setPassInput(''); }}
+              >
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.modalConfirm} onPress={handleSecurityAction}>
+                <Text style={styles.confirmText}>Verify</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       )}
     </ScrollView>
@@ -506,5 +562,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#a1a1aa',
     fontStyle: 'italic',
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    width: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#18181b',
+    marginBottom: 8,
+  },
+  modalSub: {
+    fontSize: 14,
+    color: '#71717a',
+    marginBottom: 20,
+  },
+  modalInput: {
+    backgroundColor: '#f4f4f5',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    color: '#18181b',
+    marginBottom: 24,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalCancel: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: '#f4f4f5',
+  },
+  modalConfirm: {
+    flex: 2,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: '#000',
+  },
+  cancelText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#71717a',
+  },
+  confirmText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
   }
 });

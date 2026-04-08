@@ -194,16 +194,34 @@ export async function sendBleCommand(deviceId: string, command: object): Promise
   }
 }
 
-export async function enrollFingerprint(deviceId: string, id: number): Promise<boolean> {
-  return sendBleCommand(deviceId, { cmd: "enroll", id });
+export async function enrollFingerprint(deviceId: string, id: number, password?: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "enroll", id, pass: password });
 }
 
-export async function deleteFingerprint(deviceId: string, id: number): Promise<boolean> {
-  return sendBleCommand(deviceId, { cmd: "delete", id });
+export async function deleteFingerprint(deviceId: string, id: number, password?: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "delete", id, pass: password });
 }
 
 export async function listFingerprints(deviceId: string): Promise<boolean> {
   return sendBleCommand(deviceId, { cmd: "list" });
+}
+
+export async function saveIdentity(deviceId: string, name: string, fingerprints: any[]): Promise<boolean> {
+  // We only store the basic ID->Name mapping in hardware for sync
+  const mapping = fingerprints.map(f => ({ s: f.slot, n: f.name }));
+  return sendBleCommand(deviceId, { 
+    cmd: "set_identity", 
+    name, 
+    fp_names: JSON.stringify(mapping) 
+  });
+}
+
+export async function setMasterPass(deviceId: string, pass: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "set_pass", pass });
+}
+
+export async function fetchIdentity(deviceId: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "get_identity" });
 }
 
 export function monitorFingerprintEvents(
@@ -273,13 +291,19 @@ export function monitorFingerprintEvents(
   };
 }
 
-export async function resetFingerprintMemory(deviceId: string): Promise<boolean> {
-  return sendBleCommand(deviceId, { cmd: "clear" });
+export async function resetFingerprintMemory(deviceId: string, password?: string): Promise<boolean> {
+  return sendBleCommand(deviceId, { cmd: "clear", pass: password });
 }
 
+/**
+ * Scan by device name prefix (e.g. "Motorcycle") and connect to the first match.
+ * Returns the new device ID via onConnected so the caller can persist it.
+ * This is MAC-randomization-safe — the ESP32 name is stable even if Android
+ * assigns a new random MAC address between app sessions.
+ */
 export function scanAndConnect(
-  targetDeviceId: string,
-  onConnected: () => void,
+  namePrefix: string,
+  onConnected: (newDeviceId: string) => void,
   onTimeout: () => void
 ) {
   const m = getBleManager();
@@ -287,12 +311,13 @@ export function scanAndConnect(
 
   let found = false;
   startBleScan(async (device) => {
-    if (device.id === targetDeviceId && !found) {
+    const name = device.name ?? '';
+    if (name.startsWith(namePrefix) && !found) {
       found = true;
       stopBleScan();
       const success = await connectToDevice(device.id);
       if (success) {
-        onConnected();
+        onConnected(device.id); // return the fresh device ID
       } else {
         onTimeout();
       }

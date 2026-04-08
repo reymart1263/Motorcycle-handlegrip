@@ -1,15 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { monitorFingerprintEvents } from './ble';
+
+const STORAGE_KEY = "grip_mobile_app_state";
+const DEVICE_KEY  = "grip_last_device_id";
 
 type Props = {
   deviceId: string | null;
   userEmail?: string;
   onVerified: () => void;
+  onReset: () => void;
 };
 
-export function VerificationScreen({ deviceId, userEmail, onVerified }: Props) {
+export function VerificationScreen({ deviceId, userEmail, onVerified, onReset }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,8 +24,8 @@ export function VerificationScreen({ deviceId, userEmail, onVerified }: Props) {
     const subscription = monitorFingerprintEvents(deviceId, (event) => {
       console.log('Verification event received:', event);
       if (
-        event.verified === true || 
-        event.event === 'match_ok' || 
+        event.verified === true ||
+        event.event === 'match_ok' ||
         event.event === 'verify_ok'
       ) {
         setErrorMsg(null);
@@ -36,6 +41,24 @@ export function VerificationScreen({ deviceId, userEmail, onVerified }: Props) {
       subscription.remove();
     };
   }, [deviceId, onVerified]);
+
+  const handleReset = () => {
+    Alert.alert(
+      "Start Over",
+      "This will clear all saved data and return you to the setup screen. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: async () => {
+            await AsyncStorage.multiRemove([STORAGE_KEY, DEVICE_KEY]);
+            onReset();
+          },
+        },
+      ]
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -57,6 +80,10 @@ export function VerificationScreen({ deviceId, userEmail, onVerified }: Props) {
         <ActivityIndicator size="small" color="#111" />
         <Text style={styles.footerText}>Waiting for ZW101 sensor...</Text>
       </View>
+
+      <Pressable style={styles.resetButton} onPress={handleReset}>
+        <Text style={styles.resetText}>Not your device? Start Over</Text>
+      </Pressable>
     </View>
   );
 }
@@ -125,5 +152,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#71717a',
     fontWeight: '500',
+  },
+  resetButton: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingBottom: 32,
+  },
+  resetText: {
+    fontSize: 13,
+    color: '#a1a1aa',
+    textDecorationLine: 'underline',
   },
 });
