@@ -1,7 +1,33 @@
 import { NativeModules, Platform, PermissionsAndroid } from "react-native";
 import { BleManager, Device, State } from "react-native-ble-plx";
+import { create } from "zustand";
 
 let manager: BleManager | null = null;
+
+// Zustand store for BLE state management
+interface BluetoothStore {
+  connectedDeviceId: string | null;
+  setConnectedDeviceId: (id: string | null) => void;
+  sendBleCommand: (cmd: any) => Promise<boolean>;
+}
+
+export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
+  connectedDeviceId: null,
+  setConnectedDeviceId: (id: string | null) => set({ connectedDeviceId: id }),
+  sendBleCommand: async (cmd: any) => {
+    const { connectedDeviceId } = get();
+    if (!connectedDeviceId) {
+      console.error("No device connected");
+      return false;
+    }
+    try {
+      return await sendBleCommand(connectedDeviceId, cmd);
+    } catch (err) {
+      console.error("BLE command failed:", err);
+      return false;
+    }
+  },
+}));
 
 export function getBleManager(): BleManager | null {
   if (!manager) {
@@ -289,6 +315,57 @@ export function monitorFingerprintEvents(
       if (subscription) subscription.remove();
     }
   };
+}
+
+/**
+ * Send intrusion alert email via FormSubmit.
+ * Called when ESP32 broadcasts intrusion_alert event.
+ * Uses FormSubmit endpoint with user's email.
+ */
+export async function sendIntrusionAlertEmail(
+  email: string,
+  latitude?: number,
+  longitude?: number
+): Promise<boolean> {
+  if (!email) {
+    console.warn("No email provided for intrusion alert");
+    return false;
+  }
+
+  try {
+    const latStr = latitude !== undefined ? latitude.toFixed(6) : "Unknown (No GPS Fix)";
+    const lonStr = longitude !== undefined ? longitude.toFixed(6) : "Unknown (No GPS Fix)";
+    const mapsLink = latitude !== undefined && longitude !== undefined
+      ? `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`
+      : "Location unavailable (Device may be indoors or acquiring satellites)";
+
+    // Build form-urlencoded body for FormSubmit
+    const formData = new URLSearchParams();
+    formData.append("message", "3 consecutive unauthorized fingerprint scans were just detected on your motorcycle.");
+    formData.append("latitude", latStr);
+    formData.append("longitude", lonStr);
+    formData.append("google_maps_link", mapsLink);
+
+    // Send to FormSubmit with email in the URL path
+    const response = await fetch(`https://formsubmit.co/${email}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formData.toString(),
+    });
+
+    if (response.ok) {
+      console.log("[APP] Intrusion alert email sent successfully via FormSubmit");
+      return true;
+    } else {
+      console.error("[APP] Email send failed:", response.status, response.statusText);
+      return false;
+    }
+  } catch (err) {
+    console.error("[APP] Error sending intrusion alert email:", err);
+    return false;
+  }
 }
 
 export async function resetFingerprintMemory(deviceId: string, password?: string): Promise<boolean> {

@@ -24,7 +24,7 @@ import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
 import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
 import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
 import { DashboardScreen } from "./src/DashboardScreen";
-import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice, sendBleCommand, stopBleScan, listFingerprints, monitorFingerprintEvents, fetchIdentity, saveIdentity, setMasterPass, enrollFingerprint } from "./src/ble";
+import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice, sendBleCommand, stopBleScan, listFingerprints, monitorFingerprintEvents, fetchIdentity, saveIdentity, setMasterPass, enrollFingerprint, sendIntrusionAlertEmail } from "./src/ble";
 
 const STORAGE_KEY = "grip_mobile_app_state";
 const DEVICE_KEY = "grip_last_device_id";
@@ -150,16 +150,20 @@ function MainApp() {
       if (event.event === "identity") {
         console.log("[SYNC] Received Identity Bundle from Lock:", event);
         
-        // Sync User Info if empty locally
-        if (event.name && user.name === DEFAULT_USER.name) {
-          setUser(prev => ({ ...prev, name: event.name, email: event.email }));
+        // Sync User Info (Hardware is Source of Truth)
+        if (event.name || event.email) {
+          setUser(prev => ({ 
+            ...prev, 
+            name: event.name || prev.name, 
+            email: event.email || prev.email 
+          }));
         }
 
-        // Sync Fingerprint Labels if empty locally
-        if (event.fp_names && fingerprints.length === 0) {
+        // Sync Fingerprint Labels (Hardware is Source of Truth)
+        if (event.fp_names) {
            try {
              const mapping = JSON.parse(event.fp_names);
-             if (Array.isArray(mapping)) {
+             if (Array.isArray(mapping) && mapping.length > 0) {
                const transformed: FingerprintData[] = mapping.map((m: any) => ({
                  id: m.s.toString(),
                  name: m.n,
@@ -172,11 +176,18 @@ function MainApp() {
              console.error("[SYNC] Identity Parse Error", e);
            }
         }
+      } else if (event.event === "intrusion_alert") {
+        // Hardware handles the email sending now. Just display the UI warning!
+        console.log("[ALERT] Intrusion alert received from lock:", event);
+        Alert.alert(
+          "🚨 INTRUSION ALERT", 
+          "3 failed fingerprint attempts detected!\n\nThe motorcycle lock completely locked down and its hardware has autonomously dispatched a GPS email alert."
+        );
       }
     });
 
     return () => sub.remove();
-  }, [connectedDeviceId, fingerprints.length, user.name]);
+  }, [connectedDeviceId, fingerprints.length, user.name, user.email]);
 
 
   useEffect(() => {
@@ -278,21 +289,24 @@ function MainApp() {
                   }
                 });
 
-                // Request the count and the Identity bundle
-                await listFingerprints(deviceId);
-                await fetchIdentity(deviceId);
+                // Wait 1.5 seconds to ensure the BLE notification listener is fully registered on Android
+                setTimeout(async () => {
+                  await listFingerprints(deviceId);
+                  // Stagger requests to prevent BLE notification packet loss 
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  await fetchIdentity(deviceId);
+                }, 1500);
 
-                // Timeout safety: if ESP32 doesn't respond in 4s, proceed anyway
+                // Timeout safety: if ESP32 doesn't respond in 6s, we must default to a secure state
                 setTimeout(() => {
                   sub.remove();
                   setLoading(false);
-                  // Check if we are still on loading/bluetooth state
-                  // If we didn't transition yet, default to hotspot
-                  setScreen((current) => current === "bluetooth" ? "hotspot" : current);
-                }, 4000);
+                  // For security, if we cannot verify the fingerprint count, we DEFAULT to the Lock Screen.
+                  setScreen((current) => current === "bluetooth" ? "fingerprintVerification" : current);
+                }, 6000);
               } catch (e) {
                 setLoading(false);
-                setScreen("hotspot");
+                setScreen("fingerprintVerification"); // Fail secure
               }
             }}
           />

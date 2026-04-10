@@ -426,7 +426,7 @@ const PasswordCreationScreen = ({ onBack, onNext }: { onBack: () => void; onNext
           </div>
 
           <button 
-            onClick={() => onNext(password)} 
+            onClick={() => onNext(password.trim())} 
             disabled={!isStrong || !matches}
             className="btn-primary mt-4"
           >
@@ -558,8 +558,8 @@ const VerifyPasswordScreen = ({
 
   const handleVerify = () => {
     if (currentPassword) {
-      if (password === currentPassword) {
-        onVerify(password);
+      if (password.trim() === currentPassword.trim()) {
+        onVerify(password.trim());
       } else {
         setError(true);
       }
@@ -1076,7 +1076,7 @@ const ChangePasswordScreen = ({ onBack, onSave }: { onBack: () => void; onSave: 
         </div>
 
         <button 
-          onClick={() => onSave(password)} 
+          onClick={() => onSave(password.trim())} 
           disabled={!isStrong || !matches}
           className="btn-primary mt-4"
         >

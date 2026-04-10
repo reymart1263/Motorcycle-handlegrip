@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 type Props = {
@@ -8,7 +8,7 @@ type Props = {
 
 export function SetupScreen({ onNext }: Props) {
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       {/* Header Info */}
       <View style={styles.header}>
         <Text style={styles.title}>Connect</Text>
@@ -41,16 +41,17 @@ export function SetupScreen({ onNext }: Props) {
           <Text style={styles.buttonText}>Connect</Text>
         </Pressable>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#ffffff',
+    paddingBottom: 20,
   },
   header: {
     alignItems: 'center',
@@ -109,6 +110,53 @@ const styles = StyleSheet.create({
   badgeBottomRight: {
     bottom: 25,
     right: 20,
+  },
+  webhookSection: {
+    width: '90%',
+    marginVertical: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  webhookLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 4,
+  },
+  webhookHint: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 12,
+  },
+  webhookInput: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: '#000',
+    marginBottom: 12,
+  },
+  webhookButton: {
+    backgroundColor: '#000',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  webhookButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   bottomSection: {
     width: '100%',

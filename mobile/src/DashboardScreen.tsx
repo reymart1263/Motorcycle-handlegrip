@@ -64,8 +64,18 @@ export function DashboardScreen({
 
   const handleEditSave = () => {
     if (isEditingName) {
-      if (nameDraft.trim() && nameDraft !== user.name && onUpdateUser) {
-        onUpdateUser({ ...user, name: nameDraft.trim() });
+      const finalName = nameDraft.trim();
+      if (finalName && finalName !== user.name && onUpdateUser) {
+        onUpdateUser({ ...user, name: finalName });
+        
+        // Auto-sync Profile Name to ESP32 Hardware (Background)
+        if (deviceId) {
+          sendBleCommand(deviceId, {
+            cmd: "set_identity", 
+            name: finalName, 
+            fp_names: JSON.stringify(fingerprints.map(f => ({ s: f.slot, n: f.name })))
+          });
+        }
       }
       setIsEditingName(false);
     } else {
@@ -76,8 +86,18 @@ export function DashboardScreen({
 
   const handleEmailSave = () => {
     if (isEditingEmail) {
-      if (emailDraft.trim() && emailDraft !== user.email && onUpdateUser) {
-        onUpdateUser({ ...user, email: emailDraft.trim() });
+      const finalEmail = emailDraft.trim();
+      if (finalEmail && finalEmail !== user.email && onUpdateUser) {
+        onUpdateUser({ ...user, email: finalEmail });
+        
+        // Auto-sync Background Settings (Alert Email) to ESP32 Hardware
+        if (deviceId) {
+          sendBleCommand(deviceId, { 
+            cmd: 'sync_settings', 
+            email: finalEmail,
+            time: Math.floor(Date.now() / 1000)
+          });
+        }
       }
       setIsEditingEmail(false);
     } else {
@@ -140,6 +160,11 @@ export function DashboardScreen({
 
     // Request the count from the hardware
     listFingerprints(deviceId);
+
+    // Stagger request and pull latest User Profile & Names from Hardware on launch
+    setTimeout(() => {
+      sendBleCommand(deviceId, { cmd: 'get_identity' }).catch(() => {});
+    }, 1000);
 
     return () => {
       subscription.remove();

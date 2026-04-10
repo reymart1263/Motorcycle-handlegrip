@@ -25,7 +25,8 @@
     "react-native": "^0.81.4",
     "react-native-ble-plx": "^3.5.1",
     "react-native-safe-area-context": "^5.6.1",
-    "react-native-screens": "^4.15.4"
+    "react-native-screens": "^4.15.4",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@expo/ngrok": "^4.1.3",

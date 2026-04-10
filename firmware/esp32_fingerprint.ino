@@ -76,14 +76,21 @@ Preferences    preferences; // To store WiFi credentials & MAC lock
 // ── Variables ─────────────────────────────────────────────────────────────────
 String storedSSID = "";
 String storedPASS = "";
-String storedEMAIL = "";
-
+String storedEMAIL = "";  // Email for FormSubmit alerts
+String storedNAME = "";   // Profile Name
+String storedFPNAMES = ""; // JSON string mapped to fingerprint slots
 // ── BLE objects ───────────────────────────────────────────────────────────────
 BLEServer*         pServer              = nullptr;
 BLECharacteristic* pEventCharacteristic = nullptr;
 bool deviceConnected    = false;
 bool oldDeviceConnected = false;
 int  enrollSlot         = -1;
+
+// Thread-safe command requests to be handled in main loop
+bool requestList = false;
+bool requestClear = false;
+bool requestFullReset = false;
+int  requestDeleteSlot = -1;
 
 // =============================================================================
 //  GPS helper — feed NMEA sentences from serial into TinyGPSPlus
@@ -161,6 +168,27 @@ String macToString(uint8_t* bda) {
 }
 
 // =============================================================================
+//  URL Encode helper — converts special characters for form-urlencoded data
+// =============================================================================
+String urlEncode(String str) {
+  String encoded = "";
+  char c;
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+    if (c == ' ') {
+      encoded += "+";
+    } else if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      encoded += c;
+    } else {
+      encoded += '%';
+      if (c < 16) encoded += '0';
+      encoded += String(c, HEX);
+    }
+  }
+  return encoded;
+}
+
+// =============================================================================
 //  HTTP / Email Alert Sender
 // =============================================================================
 void sendEmailAlert() {
@@ -193,16 +221,21 @@ void sendEmailAlert() {
   Serial.print("[ALARM] Local IP: ");
   Serial.println(WiFi.localIP());
 
-  IPAddress remote_ip;
-  if (WiFi.hostByName("formsubmit.co", remote_ip)) {
-    Serial.print("[ALARM] Resolved formsubmit.co to: ");
-    Serial.println(remote_ip);
+  // ── Debug DNS ──────────────────────────────────────────────────────────
+  IPAddress res;
+  if (WiFi.hostByName("www.formsubmit.co", res)) {
+    Serial.print("[ALARM] DNS Success. www.formsubmit.co: ");
+    Serial.println(res);
   } else {
-    Serial.println("[ALARM] DNS Failed: Could not resolve formsubmit.co");
+    Serial.println("[ALARM] DNS Failed for www.formsubmit.co");
   }
 
-  // ── Sync Clock from GPS or HTTP for SSL ──────────────────────────────────
-  if (gps.date.isValid() && gps.time.isValid()) {
+  Serial.print("[ALARM] Free Heap: ");
+  Serial.println(ESP.getFreeHeap());
+
+  // ── Sync Clock for SSL ──────────────────────────────────────────────────
+  // Try GPS first, then NTP
+  if (gps.date.isValid() && gps.time.isValid() && gps.date.year() >= 2024) {
     struct tm t;
     t.tm_year = gps.date.year() - 1900;
     t.tm_mon = gps.date.month() - 1;
@@ -216,77 +249,73 @@ void sendEmailAlert() {
     settimeofday(&tv, NULL);
     Serial.println("[ALARM] System time synced from GPS.");
   } else {
-    Serial.println("[ALARM] No GPS fix. Syncing time via HTTP header...");
-    HTTPClient check;
-    // We use plain HTTP (Port 80) to avoid the "date loop" problem
-    if (check.begin("http://google.com")) {
-      const char * headerKeys[] = {"Date"};
-      check.collectHeaders(headerKeys, 1);
-      int httpCode = check.sendRequest("HEAD");
-      if (httpCode > 0) {
-        String dateStr = check.header("Date");
-        Serial.print("[ALARM] HTTP Date Header: ");
-        Serial.println(dateStr);
-        // Basic parser for "Fri, 07 Apr 2026 14:15:00 GMT"
-        // Minimal set: just get year/month/day to satisfy SSL
-        configTime(0, 0, "pool.ntp.org"); // start ntp machine anyway
-      }
-      check.end();
-    }
-    // Fallback: Use manual sync if NTP/HTTP fails to update system time
-    // ESP32 configTime is usually better if at least one UDP packet gets through
+    Serial.println("[ALARM] Syncing time via NTP...");
     configTime(0, 0, "pool.ntp.org", "time.google.com");
-    delay(2000);
+    int retry = 0;
+    while (time(nullptr) < 1000000 && retry < 10) {
+      feedGPS();
+      delay(500);
+      retry++;
+    }
   }
 
-  // Verify time
+  // Verify time and apply PHT timezone offset (UTC+8)
   time_t now = time(nullptr);
-  struct tm* now_tm = localtime(&now);
+  now += 28800; // 8 hours offset for Philippines
+  struct tm* now_tm = gmtime(&now);
   char timeBuf[64];
-  strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", now_tm);
+  strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S (PHT)", now_tm);
   Serial.print("[ALARM] Current System Time: ");
   Serial.println(timeBuf);
+  
+  Serial.print("[ALARM] Free Heap before BLE pause: ");
+  Serial.println(ESP.getFreeHeap());
 
-  if (now < 1000000) {
-    Serial.println("[ALARM] WARNING: Time still not synced. Trying manual override...");
-    // If all else fails, set to a hardcoded "recent" date so SSL passes
-    struct timeval tv = { .tv_sec = 1775537383, .tv_usec = 0 }; // Approx April 2026
-    settimeofday(&tv, NULL);
-  }
+  // SSL handshakes require ~40KB of contiguous heap. We must turn off BLE temporarily.
+  Serial.println("[ALARM] Pausing BLE to free memory for SSL handshake...");
+  BLEDevice::deinit(true);
+  delay(500);
+  
+  Serial.print("[ALARM] Free Heap after BLE pause: ");
+  Serial.println(ESP.getFreeHeap());
 
   WiFiClientSecure client;
-  client.setInsecure(); // FormSubmit https without certificate bundle tracking
-  client.setHandshakeTimeout(20000); 
+  client.setInsecure();  
   HTTPClient http;
 
-  String url = "https://formsubmit.co/ajax/" + storedEMAIL;
+  String url = "https://formsubmit.co/ajax/" + storedEMAIL; // Use AJAX endpoint to avoid 429 HTML block!
   Serial.print("[ALARM] Target URL: ");
   Serial.println(url);
   
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Accept", "application/json");
-    http.addHeader("User-Agent", "PostmanRuntime/7.29.0");
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(20000); 
+    http.addHeader("User-Agent", "ESP32-Motorcycle-Lock/2.0");
+    http.setTimeout(15000); 
 
-    String latStr = gpsReady() ? String(gps.location.lat(), 6) : "Unknown (No GPS Fix)";
-    String lonStr = gpsReady() ? String(gps.location.lng(), 6) : "Unknown (No GPS Fix)";
+    String latStr = gpsReady() ? String(gps.location.lat(), 6) : "Unknown";
+    String lonStr = gpsReady() ? String(gps.location.lng(), 6) : "Unknown";
     String mapsLink = gpsReady() 
           ? "https://www.google.com/maps/search/?api=1&query=" + latStr + "," + lonStr 
-          : "Location unavailable (Device indoors or acquiring satellites)";
+          : "Location unavailable (Check GPS fix)";
 
-    StaticJsonDocument<512> postDoc;
-    postDoc["_subject"] = "🚨 URGENT: Motorcycle Intruder Alert!";
-    postDoc["message"] = "3 consecutive unauthorized fingerprint scans were natively detected by hardware lock over Wi-Fi.";
-    postDoc["latitude"] = latStr;
-    postDoc["longitude"] = lonStr;
-    postDoc["google_maps_link"] = mapsLink;
+    // Build JSON body for FormSubmit AJAX API
+    StaticJsonDocument<512> jsonBody;
+    jsonBody["_captcha"] = "false";
+    jsonBody["_subject"] = "URGENT: Motorcycle Intruder Alert!";
+    jsonBody["message"] = "3 consecutive unauthorized fingerprint scans were just detected on your motorcycle lock.";
+    jsonBody["latitude"] = latStr;
+    jsonBody["longitude"] = lonStr;
+    jsonBody["google_maps_link"] = mapsLink;
+    jsonBody["timestamp"] = timeBuf;
 
     String requestBody;
-    serializeJson(postDoc, requestBody);
+    serializeJson(jsonBody, requestBody);
 
-    Serial.println("[ALARM] Firing native hardware webhook...");
+    Serial.println("[ALARM] Sending intrusion alert email via JSON AJAX...");
+    Serial.print("[ALARM] Request length: ");
+    Serial.println(requestBody.length());
+    
     int httpCode = http.POST(requestBody);
     
     if (httpCode > 0) {
@@ -294,12 +323,31 @@ void sendEmailAlert() {
       String payload = http.getString();
       Serial.println("[ALARM] Response: " + payload);
     } else {
-      Serial.printf("[ALARM] POST Error! HTTP fail: %s\n", http.errorToString(httpCode).c_str());
+      Serial.printf("[ALARM] POST Error! Code: %d — %s\n", httpCode, http.errorToString(httpCode).c_str());
+      // Extra info for -1 error
+      if (httpCode == -1) {
+        Serial.println("[ALARM] Hint: -1 often means the server is unreachable or the connection was reset instantly.");
+        Serial.print("[ALARM] Wi-Fi Status: ");
+        Serial.println(WiFi.status() == WL_CONNECTED ? "CONNECTED" : "LOST");
+      }
     }
     http.end();
   } else {
     Serial.println("[ALARM] HTTP begin failed.");
   }
+
+  // After sending alert, enforce a 30-second security cooldown
+  Serial.println("==================================================");
+  Serial.println("[ALARM] INTRUDER LOCKDOWN ACTIVATED");
+  Serial.println("==================================================");
+  
+  for (int i = 30; i > 0; i--) {
+    Serial.printf("[ALARM] System locked. Cooldown remaining: %d seconds...\n", i);
+    delay(1000); // delay automatically feeds the ESP32 Watchdog Timer
+  }
+
+  Serial.println("[ALARM] Cooldown finished! Rebooting system to restore normal functions...");
+  ESP.restart();
 }
 
 // =============================================================================
@@ -363,28 +411,45 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
       sendStatus("enroll_start", enrollSlot);
     }
     else if (cmd == "delete") {
-      if (finger.deleteModel(id) == FINGERPRINT_OK) {
-        sendStatus("delete_ok", id);
-      } else {
-        sendStatus("delete_fail", id, -1, -1, "Sensor error");
-      }
+      requestDeleteSlot = id;
     }
     else if (cmd == "clear") {
-      if (finger.emptyDatabase() == FINGERPRINT_OK) {
-        Serial.println("[FP] Fingerprint Database cleared.");
-        sendStatus("clear_ok");
-      } else {
-        sendStatus("clear_fail");
-      }
+      requestClear = true;
     }
     else if (cmd == "full_reset") {
-      finger.emptyDatabase();
-      Serial.println("[SYSTEM] FULL RESET PERFORMED. Database cleared.");
-      sendStatus("clear_ok"); // Mobile app listens for this to confirm reset
+      requestFullReset = true;
     }
     else if (cmd == "list") {
-      finger.getTemplateCount();
-      sendStatus("count", -1, finger.templateCount);
+      requestList = true;
+    }
+    else if (cmd == "set_identity") {
+      String name = doc["name"] | "";
+      String fp_names = doc["fp_names"] | "";
+      if (name != "") {
+        storedNAME = name;
+        preferences.putString("uname", storedNAME);
+        Serial.println("[BLE] Set user name: " + name);
+      }
+      if (fp_names != "") {
+        storedFPNAMES = fp_names;
+        preferences.putString("fpnames", storedFPNAMES);
+        Serial.println("[BLE] Set fp labels: " + fp_names);
+      }
+      sendStatus("identity_ok");
+    }
+    else if (cmd == "get_identity") {
+      StaticJsonDocument<512> ldoc;
+      ldoc["event"] = "identity";
+      ldoc["name"] = storedNAME;
+      ldoc["email"] = storedEMAIL;
+      if (storedFPNAMES != "") {
+        // Must send empty string as null in frontend or handle gracefully
+        ldoc["fp_names"] = storedFPNAMES;
+      }
+      String output;
+      serializeJson(ldoc, output);
+      sendEvent(output);
+      Serial.println("[BLE] Sent Identity Bundle to newly connected phone.");
     }
     else if (cmd == "sync_settings") {
       String email = doc["email"] | "";
@@ -435,7 +500,10 @@ uint8_t getFingerprintEnroll() {
   }
 
   p = finger.image2Tz(1);
-  if (p != FINGERPRINT_OK) return p;
+  if (p != FINGERPRINT_OK) {
+    sendStatus("enroll_fail", enrollSlot, -1, -1, "Failed to convert first fingerprint image");
+    return p;
+  }
 
   sendStatus("remove_finger");
   // Feed GPS during the 2-second wait instead of a blocking delay
@@ -454,20 +522,29 @@ uint8_t getFingerprintEnroll() {
     feedGPS();
     p = finger.getImage();
     if (p == FINGERPRINT_NOFINGER) continue;
-    if (p != FINGERPRINT_OK) return p;
+    if (p != FINGERPRINT_OK) {
+      sendStatus("enroll_fail", enrollSlot, -1, -1, "Failed to capture second fingerprint");
+      return p;
+    }
   }
 
   p = finger.image2Tz(2);
-  if (p != FINGERPRINT_OK) return p;
+  if (p != FINGERPRINT_OK) {
+    sendStatus("enroll_fail", enrollSlot, -1, -1, "Failed to convert second fingerprint image");
+    return p;
+  }
 
   p = finger.createModel();
+  if (p != FINGERPRINT_OK) {
+    sendStatus("enroll_fail", enrollSlot, -1, -1, "Fingerprints do not match - try again");
+    return p;
+  }
+
+  p = finger.storeModel(enrollSlot);
   if (p == FINGERPRINT_OK) {
-    p = finger.storeModel(enrollSlot);
-    if (p == FINGERPRINT_OK) {
-      finger.getTemplateCount();
-      sendStatus("enroll_ok", enrollSlot, finger.templateCount);
-      return FINGERPRINT_OK;
-    }
+    finger.getTemplateCount();
+    sendStatus("enroll_ok", enrollSlot, finger.templateCount);
+    return FINGERPRINT_OK;
   }
 
   sendStatus("enroll_fail", enrollSlot, -1, -1, "Failed to store template");
@@ -489,9 +566,12 @@ void setup() {
   storedSSID = preferences.getString("ssid", "");
   storedPASS = preferences.getString("pass", "");
   storedEMAIL = preferences.getString("email", "");
+  storedNAME = preferences.getString("uname", "");
+  storedFPNAMES = preferences.getString("fpnames", "");
 
   Serial.println("[PREFS] Loaded SSID: " + (storedSSID == "" ? "None" : storedSSID));
   Serial.println("[PREFS] Loaded Email: " + (storedEMAIL == "" ? "None" : storedEMAIL));
+  Serial.println("[PREFS] Loaded Name: " + (storedNAME == "" ? "None" : storedNAME));
 
   // ── Connect WiFi if available ───────────────────────────────────────────
   if (storedSSID != "") {
@@ -630,10 +710,45 @@ void loop() {
     Serial.println("[BLE] Connection recognized");
   }
 
-  // ── Enrollment takes priority ─────────────────────────────────────────────
+  // ── Hardware Operations / Interrupt Requests (Thread Safe) ───────────────
   if (enrollSlot != -1) {
     getFingerprintEnroll();
     enrollSlot = -1;
+    return;
+  }
+  if (requestList) {
+    finger.getTemplateCount();
+    sendStatus("count", -1, finger.templateCount);
+    requestList = false;
+    return;
+  }
+  if (requestDeleteSlot != -1) {
+    if (finger.deleteModel(requestDeleteSlot) == FINGERPRINT_OK) {
+      sendStatus("delete_ok", requestDeleteSlot);
+    } else {
+      sendStatus("delete_fail", requestDeleteSlot, -1, -1, "Sensor error");
+    }
+    requestDeleteSlot = -1;
+    return;
+  }
+  if (requestClear) {
+    if (finger.emptyDatabase() == FINGERPRINT_OK) {
+      sendStatus("clear_ok");
+    } else {
+      sendStatus("clear_fail");
+    }
+    requestClear = false;
+    return;
+  }
+  if (requestFullReset) {
+    finger.emptyDatabase();
+    preferences.clear();
+    storedSSID = ""; storedPASS = ""; storedEMAIL = "";
+    storedNAME = ""; storedFPNAMES = "";
+    WiFi.disconnect(true, true);
+    Serial.println("[SYSTEM] FULL RESET PERFORMED. Database and all NVS preferences entirely wiped.");
+    sendStatus("clear_ok"); 
+    requestFullReset = false;
     return;
   }
 
@@ -646,7 +761,7 @@ void loop() {
 
       p = finger.fingerFastSearch();
 
-      if (p == FINGERPRINT_OK) {
+      if (p == FINGERPRINT_OK && finger.confidence > 0) {
         consecutiveFails = 0; // Reset consecutive failures count
         
         // ── VALID — unlock servo, no GPS triggered ────────────────────────
@@ -658,9 +773,8 @@ void loop() {
         lockServo.write(SERVO_UNLOCKED);   // always write — self-correcting
         delay(500);
         sendStatus("verify_ok", finger.fingerID);
-        delay(1500);
 
-      } else if (p == FINGERPRINT_NOTFOUND) {
+      } else if (p == FINGERPRINT_NOTFOUND || (p == FINGERPRINT_OK && finger.confidence == 0)) {
         consecutiveFails++;
         
         // ── INVALID — lock servo AND print GPS coordinates ─────────────────
@@ -685,19 +799,25 @@ void loop() {
           // Print GPS coordinates to Serial Monitor
           printGPSToSerial();
 
-          // Native Independent HTTP Alert Firing!
+          // Send Email alert directly from hardware
           sendEmailAlert();
           
-          consecutiveFails = 0; // Reset counter after triggering email alert
+          consecutiveFails = 0; // Reset counter after triggering alert
         } else {
           // Send standard UI rejection
           sendStatus("verify_fail");
         }
-
-        delay(500);
       }
     }
+    
+    // CRITICAL: Block any further scanning until the finger is physically lifted.
+    // This perfectly prevents getting 3 rapid strikes from holding an incorrect finger!
+    while (finger.getImage() == FINGERPRINT_OK) { 
+      delay(100); 
+    }
+    delay(500); // Breathe before allowing next full attempt
   }
 
   delay(50);
 }
+
