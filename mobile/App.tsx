@@ -151,11 +151,12 @@ function MainApp() {
         console.log("[SYNC] Received Identity Bundle from Lock:", event);
         
         // Sync User Info (Hardware is Source of Truth)
-        if (event.name || event.email) {
+        if (event.name || event.email || event.pass) {
           setUser(prev => ({ 
             ...prev, 
             name: event.name || prev.name, 
-            email: event.email || prev.email 
+            email: event.email || prev.email,
+            password: event.pass || prev.password
           }));
         }
 
@@ -376,11 +377,19 @@ function MainApp() {
         {screen === "emailRegistration" && (
           <EmailRegistrationScreen
             onBack={() => setScreen("passwordCreation")}
-            onNext={(email) => {
+            onNext={async (email) => {
               const updatedUser = { ...user, email };
               setUser(updatedUser);
+              
               if (connectedDeviceId) {
-                saveIdentity(connectedDeviceId, user.name, fingerprints);
+                // Sync Name & Fingerprints
+                await saveIdentity(connectedDeviceId, user.name, fingerprints);
+                // Sync newly registered email to ESP32 Hardware permanently
+                await sendBleCommand(connectedDeviceId, { 
+                  cmd: 'sync_settings', 
+                  email: email, 
+                  time: Math.floor(Date.now() / 1000)
+                });
               }
               setScreen("dashboard");
             }}

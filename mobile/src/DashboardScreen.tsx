@@ -33,8 +33,9 @@ export function DashboardScreen({
   const [isLocating, setIsLocating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [location, setLocation] = useState<{ lat: number, lon: number } | null>(null);
-  const [securityModal, setSecurityModal] = useState<{ visible: boolean; type: 'delete' | 'clear' | 'reset' | 'enroll'; data?: any }>({ visible: false, type: 'enroll' });
+  const [securityModal, setSecurityModal] = useState<{ visible: boolean; type: 'edit_name' | 'edit_email' | 'delete' | 'clear' | 'reset' | 'enroll'; data?: any }>({ visible: false, type: 'enroll' });
   const [passInput, setPassInput] = useState('');
+  const [isPassVisible, setIsPassVisible] = useState(false);
 
   const handleTrackLocation = async () => {
     setIsLocating(true);
@@ -66,18 +67,11 @@ export function DashboardScreen({
     if (isEditingName) {
       const finalName = nameDraft.trim();
       if (finalName && finalName !== user.name && onUpdateUser) {
-        onUpdateUser({ ...user, name: finalName });
-        
-        // Auto-sync Profile Name to ESP32 Hardware (Background)
-        if (deviceId) {
-          sendBleCommand(deviceId, {
-            cmd: "set_identity", 
-            name: finalName, 
-            fp_names: JSON.stringify(fingerprints.map(f => ({ s: f.slot, n: f.name })))
-          });
-        }
+        // Trigger Password Modal instead of saving instantly
+        setSecurityModal({ visible: true, type: 'edit_name' });
+      } else {
+        setIsEditingName(false);
       }
-      setIsEditingName(false);
     } else {
       setNameDraft(user.name);
       setIsEditingName(true);
@@ -88,18 +82,11 @@ export function DashboardScreen({
     if (isEditingEmail) {
       const finalEmail = emailDraft.trim();
       if (finalEmail && finalEmail !== user.email && onUpdateUser) {
-        onUpdateUser({ ...user, email: finalEmail });
-        
-        // Auto-sync Background Settings (Alert Email) to ESP32 Hardware
-        if (deviceId) {
-          sendBleCommand(deviceId, { 
-            cmd: 'sync_settings', 
-            email: finalEmail,
-            time: Math.floor(Date.now() / 1000)
-          });
-        }
+        // Trigger Password Modal instead of saving instantly
+        setSecurityModal({ visible: true, type: 'edit_email' });
+      } else {
+        setIsEditingEmail(false);
       }
-      setIsEditingEmail(false);
     } else {
       setEmailDraft(user.email);
       setIsEditingEmail(true);
@@ -181,8 +168,40 @@ export function DashboardScreen({
       Alert.alert("Required", "Please enter the system password.");
       return;
     }
+    
+    // Verify Master Password locally before allowing ANY action
+    // Fail-safe: If password is undefined due to transitioning to the new hardware-sync system, 
+    // automatically accept it and save it directly to the hardware permanently!
+    if (user.password && password !== user.password) {
+      Alert.alert("Access Denied", "Incorrect Master Password.");
+      return;
+    }
 
-    if (securityModal.type === 'delete' && onDeleteWithPassword && securityModal.data) {
+    if (!user.password) {
+      if (onUpdateUser) onUpdateUser({ ...user, password: password });
+      if (deviceId) sendBleCommand(deviceId, { cmd: "set_pass", pass: password });
+    }
+
+    if (securityModal.type === 'edit_name') {
+      const finalName = nameDraft.trim();
+      if (onUpdateUser) onUpdateUser({ ...user, name: finalName });
+      if (deviceId) {
+        sendBleCommand(deviceId, {
+          cmd: "set_identity", name: finalName, 
+          fp_names: JSON.stringify(fingerprints.map(f => ({ s: f.slot, n: f.name })))
+        });
+      }
+      setIsEditingName(false);
+    } else if (securityModal.type === 'edit_email') {
+      const finalEmail = emailDraft.trim();
+      if (onUpdateUser) onUpdateUser({ ...user, email: finalEmail });
+      if (deviceId) {
+        sendBleCommand(deviceId, { 
+          cmd: 'sync_settings', email: finalEmail, time: Math.floor(Date.now() / 1000)
+        });
+      }
+      setIsEditingEmail(false);
+    } else if (securityModal.type === 'delete' && onDeleteWithPassword && securityModal.data) {
       onDeleteWithPassword(securityModal.data.id, securityModal.data.slot, password);
     } else if (securityModal.type === 'clear' && onResetWithPassword) {
       onResetWithPassword(password);
@@ -194,6 +213,7 @@ export function DashboardScreen({
 
     setSecurityModal({ ...securityModal, visible: false });
     setPassInput('');
+    setIsPassVisible(false);
   };
 
   const confirmDelete = (fp: FingerprintData) => {
@@ -304,7 +324,6 @@ export function DashboardScreen({
           </View>
           <View style={styles.userInfoText}>
             <Text style={styles.userNameText}>{fp.name}</Text>
-            <Text style={styles.tapText}>TAP TO MANAGE ACCESS</Text>
           </View>
           <Pressable style={styles.fpEditIcon} onPress={() => confirmDelete(fp)}>
             <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
@@ -346,18 +365,23 @@ export function DashboardScreen({
                securityModal.type === 'enroll' ? 'Verification required to add new fingerprint' :
                'Authorization required for memory reset'} 
             </Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="Enter System Password"
-              secureTextEntry
-              value={passInput}
-              onChangeText={setPassInput}
-              autoFocus
-            />
+            <View style={styles.modalInputContainer}>
+              <TextInput
+                style={styles.modalInputWithEye}
+                placeholder="Enter System Password"
+                secureTextEntry={!isPassVisible}
+                value={passInput}
+                onChangeText={setPassInput}
+                autoFocus
+              />
+              <Pressable onPress={() => setIsPassVisible(!isPassVisible)} style={styles.modalEyeIcon} hitSlop={10}>
+                <Ionicons name={isPassVisible ? "eye-off-outline" : "eye-outline"} size={22} color="#a1a1aa" />
+              </Pressable>
+            </View>
             <View style={styles.modalButtons}>
               <Pressable 
                 style={styles.modalCancel} 
-                onPress={() => { setSecurityModal({ ...securityModal, visible: false }); setPassInput(''); }}
+                onPress={() => { setSecurityModal({ ...securityModal, visible: false }); setPassInput(''); setIsPassVisible(false); }}
               >
                 <Text style={styles.cancelText}>Cancel</Text>
               </Pressable>
@@ -618,13 +642,30 @@ const styles = StyleSheet.create({
     color: '#71717a',
     marginBottom: 20,
   },
+  modalInputContainer: {
+    position: 'relative',
+    justifyContent: 'center',
+    marginBottom: 24,
+    width: '100%',
+  },
   modalInput: {
     backgroundColor: '#f4f4f5',
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
     color: '#18181b',
-    marginBottom: 24,
+  },
+  modalInputWithEye: {
+    backgroundColor: '#f4f4f5',
+    borderRadius: 12,
+    padding: 16,
+    paddingRight: 45,
+    fontSize: 16,
+    color: '#18181b',
+  },
+  modalEyeIcon: {
+    position: 'absolute',
+    right: 15,
   },
   modalButtons: {
     flexDirection: 'row',

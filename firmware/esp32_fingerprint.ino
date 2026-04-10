@@ -57,6 +57,7 @@
 #define GPS_RX_PIN      34    // GPS TX  → ESP32 GPIO34 (input-only, 3.3V safe)
 #define GPS_TX_PIN      12    // GPS RX  → ESP32 GPIO12
 #define SERVO_PIN       13    // SG90 signal (orange/yellow)
+#define BOOT_BUTTON_PIN 0     // Built-in ESP32 BOOT button (Active-Low)
 
 // ── Servo angles ──────────────────────────────────────────────────────────────
 #define SERVO_UNLOCKED  180   // Valid fingerprint   → clockwise   → unlocked
@@ -79,6 +80,7 @@ String storedPASS = "";
 String storedEMAIL = "";  // Email for FormSubmit alerts
 String storedNAME = "";   // Profile Name
 String storedFPNAMES = ""; // JSON string mapped to fingerprint slots
+String storedMPASS = "";   // Master Password
 // ── BLE objects ───────────────────────────────────────────────────────────────
 BLEServer*         pServer              = nullptr;
 BLECharacteristic* pEventCharacteristic = nullptr;
@@ -291,6 +293,8 @@ void sendEmailAlert() {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Accept", "application/json");
     http.addHeader("User-Agent", "ESP32-Motorcycle-Lock/2.0");
+    http.addHeader("Origin", "https://localhost");
+    http.addHeader("Referer", "https://localhost/");
     http.setTimeout(15000); 
 
     String latStr = gpsReady() ? String(gps.location.lat(), 6) : "Unknown";
@@ -437,11 +441,23 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
       }
       sendStatus("identity_ok");
     }
+    else if (cmd == "set_pass") {
+      String p = doc["pass"] | "";
+      if (p != "") {
+        storedMPASS = p;
+        preferences.putString("mpass", storedMPASS);
+        Serial.println("[BLE] Master Password Saved to hardware.");
+      }
+      sendStatus("pass_ok");
+    }
     else if (cmd == "get_identity") {
       StaticJsonDocument<512> ldoc;
       ldoc["event"] = "identity";
       ldoc["name"] = storedNAME;
       ldoc["email"] = storedEMAIL;
+      if (storedMPASS != "") {
+        ldoc["pass"] = storedMPASS;
+      }
       if (storedFPNAMES != "") {
         // Must send empty string as null in frontend or handle gracefully
         ldoc["fp_names"] = storedFPNAMES;
@@ -561,6 +577,9 @@ void setup() {
   Serial.println("  Motorcycle Lock — Booting...");
   Serial.println("==============================================");
 
+  // ── Hardware Buttons ────────────────────────────────────────────────────
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+
   // ── Load Preferences ────────────────────────────────────────────────────
   preferences.begin("grip-app", false);
   storedSSID = preferences.getString("ssid", "");
@@ -568,6 +587,7 @@ void setup() {
   storedEMAIL = preferences.getString("email", "");
   storedNAME = preferences.getString("uname", "");
   storedFPNAMES = preferences.getString("fpnames", "");
+  storedMPASS = preferences.getString("mpass", "");
 
   Serial.println("[PREFS] Loaded SSID: " + (storedSSID == "" ? "None" : storedSSID));
   Serial.println("[PREFS] Loaded Email: " + (storedEMAIL == "" ? "None" : storedEMAIL));
@@ -679,11 +699,28 @@ void setup() {
 // Tracks when we last printed GPS status during idle (every 10 s)
 unsigned long lastGpsStatusPrint = 0;
 int consecutiveFails = 0;
+unsigned long buttonPressStart = 0;
+bool buttonIsPressed = false;
 
 void loop() {
-
   // Always feed GPS data so the fix stays current
   feedGPS();
+
+  // ── Hardware Override (BOOT Button) ──────────────────────────────────────
+  if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
+    if (!buttonIsPressed) {
+      buttonIsPressed = true;
+      buttonPressStart = millis();
+    } else {
+      if (millis() - buttonPressStart >= 5000) {
+        Serial.println("[SYSTEM] BOOT button held for 5 seconds. TRIGGERING FACTORY RESET...");
+        requestFullReset = true;
+        buttonPressStart = millis(); // Reset timer so it doesn't spam if held down
+      }
+    }
+  } else {
+    buttonIsPressed = false;
+  }
 
   // ── Print GPS fix status to serial every 10 s until fix acquired ─────────
   if (!gpsReady() && millis() - lastGpsStatusPrint > 10000) {
