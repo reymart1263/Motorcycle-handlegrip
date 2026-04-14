@@ -7,7 +7,8 @@ export type Screen =
   | "fingerprintVerification"
   | "passwordCreation"
   | "emailRegistration"
-  | "dashboard";
+  | "dashboard"
+  | "accessLogs";
 
 export interface User {
   name: string;
@@ -20,6 +21,7 @@ export interface FingerprintData {
   name: string;
   userId: string;
   slot: number;
+  isArchived?: boolean;
 }
 
 export interface ApiState {

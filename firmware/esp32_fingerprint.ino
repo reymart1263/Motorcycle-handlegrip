@@ -81,6 +81,7 @@ String storedEMAIL = "";  // Email for FormSubmit alerts
 String storedNAME = "";   // Profile Name
 String storedFPNAMES = ""; // JSON string mapped to fingerprint slots
 String storedMPASS = "";   // Master Password
+String storedARCHIVED = ""; // Comma-separated list of archived slot IDs
 // ── BLE objects ───────────────────────────────────────────────────────────────
 BLEServer*         pServer              = nullptr;
 BLECharacteristic* pEventCharacteristic = nullptr;
@@ -93,6 +94,32 @@ bool requestList = false;
 bool requestClear = false;
 bool requestFullReset = false;
 int  requestDeleteSlot = -1;
+
+// =============================================================================
+//  Access Log Helper
+//  Keeps track of access attempts for monitoring
+// =============================================================================
+void logAccess(int slot, int status) {
+  time_t now = time(nullptr);
+  // Offset to UTC+8 if you want local time encoded directly, or handle in mobile.
+  // The phone will sync exact epoch (UTC). We'll assume the epoch is standard UTC.
+  String entry = String(now) + "," + String(slot) + "," + String(status) + ";";
+  String currentLog = preferences.getString("log", "");
+  currentLog = entry + currentLog;
+  
+  // Keep only the last 40 entries to prevent memory overflow
+  int semicolons = 0;
+  for (int i=0; i < currentLog.length(); i++) {
+    if (currentLog[i] == ';') {
+      semicolons++;
+      if (semicolons >= 40) {
+        currentLog = currentLog.substring(0, i+1);
+        break;
+      }
+    }
+  }
+  preferences.putString("log", currentLog);
+}
 
 // =============================================================================
 //  GPS helper — feed NMEA sentences from serial into TinyGPSPlus
@@ -439,6 +466,11 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
         preferences.putString("fpnames", storedFPNAMES);
         Serial.println("[BLE] Set fp labels: " + fp_names);
       }
+      if (doc.containsKey("archived")) {
+        storedARCHIVED = doc["archived"] | "";
+        preferences.putString("archived", storedARCHIVED);
+        Serial.println("[BLE] Set archived slots: " + storedARCHIVED);
+      }
       sendStatus("identity_ok");
     }
     else if (cmd == "set_pass") {
@@ -462,10 +494,27 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
         // Must send empty string as null in frontend or handle gracefully
         ldoc["fp_names"] = storedFPNAMES;
       }
+      if (storedARCHIVED != "") {
+        ldoc["archived"] = storedARCHIVED;
+      }
       String output;
       serializeJson(ldoc, output);
       sendEvent(output);
       Serial.println("[BLE] Sent Identity Bundle to newly connected phone.");
+    }
+    else if (cmd == "get_log") {
+      String rawLog = preferences.getString("log", "");
+      StaticJsonDocument<1024> ldoc;
+      ldoc["event"] = "access_log";
+      ldoc["data"] = rawLog;
+      String output;
+      serializeJson(ldoc, output);
+      sendEvent(output);
+      Serial.println("[BLE] Sent Access Log.");
+    }
+    else if (cmd == "clear_log") {
+      preferences.remove("log");
+      sendStatus("log_cleared");
     }
     else if (cmd == "sync_settings") {
       String email = doc["email"] | "";
@@ -588,6 +637,7 @@ void setup() {
   storedNAME = preferences.getString("uname", "");
   storedFPNAMES = preferences.getString("fpnames", "");
   storedMPASS = preferences.getString("mpass", "");
+  storedARCHIVED = preferences.getString("archived", "");
 
   Serial.println("[PREFS] Loaded SSID: " + (storedSSID == "" ? "None" : storedSSID));
   Serial.println("[PREFS] Loaded Email: " + (storedEMAIL == "" ? "None" : storedEMAIL));
@@ -781,7 +831,7 @@ void loop() {
     finger.emptyDatabase();
     preferences.clear();
     storedSSID = ""; storedPASS = ""; storedEMAIL = "";
-    storedNAME = ""; storedFPNAMES = "";
+    storedNAME = ""; storedFPNAMES = ""; storedARCHIVED = "";
     WiFi.disconnect(true, true);
     Serial.println("[SYSTEM] FULL RESET PERFORMED. Database and all NVS preferences entirely wiped.");
     sendStatus("clear_ok"); 
@@ -799,17 +849,43 @@ void loop() {
       p = finger.fingerFastSearch();
 
       if (p == FINGERPRINT_OK && finger.confidence > 0) {
-        consecutiveFails = 0; // Reset consecutive failures count
-        
-        // ── VALID — unlock servo, no GPS triggered ────────────────────────
-        Serial.print("[FP] Matched! ID: ");
-        Serial.print(finger.fingerID);
-        Serial.print("  Confidence: ");
-        Serial.println(finger.confidence);
+        // Check if archived
+        String searchStr = "," + String(finger.fingerID) + ",";
+        if (storedARCHIVED.indexOf(searchStr) >= 0) {
+          // ZW101 auto-flashes GREEN naturally when it finds a match. 
+          // Override it by explicitly flashing RED (2=flash, 25=speed, 1=red, 10=count)
+          finger.LEDcontrol(2, 25, 1, 10);
+          
+          consecutiveFails++;
+          Serial.print("[FP] Matched, but fingerprint is ARCHIVED. Access denied. ID: ");
+          Serial.println(finger.fingerID);
+          lockServo.write(SERVO_LOCKED);     // always write — self-correcting
+          logAccess(finger.fingerID, 2); // Log archived attempt
+          delay(500);
+          sendStatus("verify_archived", finger.fingerID);
 
-        lockServo.write(SERVO_UNLOCKED);   // always write — self-correcting
-        delay(500);
-        sendStatus("verify_ok", finger.fingerID);
+          if (consecutiveFails >= 3) {
+            StaticJsonDocument<200> ldoc;
+            ldoc["event"] = "intrusion_alert";
+            if (gpsReady()) { ldoc["lat"] = gps.location.lat(); ldoc["lon"] = gps.location.lng(); }
+            String output; serializeJson(ldoc, output); sendEvent(output);
+            printGPSToSerial(); sendEmailAlert();
+            consecutiveFails = 0;
+          }
+        } else {
+          consecutiveFails = 0; // Reset consecutive failures count
+          
+          // ── VALID — unlock servo, no GPS triggered ────────────────────────
+          Serial.print("[FP] Matched! ID: ");
+          Serial.print(finger.fingerID);
+          Serial.print("  Confidence: ");
+          Serial.println(finger.confidence);
+
+          lockServo.write(SERVO_UNLOCKED);   // always write — self-correcting
+          logAccess(finger.fingerID, 1); // Log successful unlock
+          delay(500);
+          sendStatus("verify_ok", finger.fingerID);
+        }
 
       } else if (p == FINGERPRINT_NOTFOUND || (p == FINGERPRINT_OK && finger.confidence == 0)) {
         consecutiveFails++;
@@ -819,6 +895,7 @@ void loop() {
         Serial.println(consecutiveFails);
 
         lockServo.write(SERVO_LOCKED);     // always write — self-correcting
+        logAccess(-1, 0); // Log failed attempt
         delay(500);
         
         if (consecutiveFails >= 3) {

@@ -32,6 +32,8 @@ export function VerificationScreen({ deviceId, userEmail, onVerified, onReset }:
         onVerified();
       } else if (event.event === 'verify_fail') {
         setErrorMsg("Fingerprint not recognized. Please try again.");
+      } else if (event.event === 'verify_archived') {
+        setErrorMsg("Access Denied: Fingerprint is temporarily archived/disabled.");
       } else if (event.event === 'intrusion_alert') {
         setErrorMsg("Too many invalid attempts! Alert issued by hardware.");
       }

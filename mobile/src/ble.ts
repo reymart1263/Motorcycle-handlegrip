@@ -235,10 +235,12 @@ export async function listFingerprints(deviceId: string): Promise<boolean> {
 export async function saveIdentity(deviceId: string, name: string, fingerprints: any[]): Promise<boolean> {
   // We only store the basic ID->Name mapping in hardware for sync
   const mapping = fingerprints.map(f => ({ s: f.slot, n: f.name }));
+  const archivedStr = fingerprints.filter(f => f.isArchived).map(f => `,${f.slot},`).join('');
   return sendBleCommand(deviceId, { 
     cmd: "set_identity", 
     name, 
-    fp_names: JSON.stringify(mapping) 
+    fp_names: JSON.stringify(mapping),
+    archived: archivedStr
   });
 }
 

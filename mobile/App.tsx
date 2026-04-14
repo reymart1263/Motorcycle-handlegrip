@@ -24,6 +24,7 @@ import { EmailRegistrationScreen } from "./src/EmailRegistrationScreen";
 import { FingerprintRegistrationScreen } from "./src/FingerprintRegistrationScreen";
 import { FingerprintNamingScreen } from "./src/FingerprintNamingScreen";
 import { DashboardScreen } from "./src/DashboardScreen";
+import { AccessLogScreen } from "./src/AccessLogScreen";
 import { deleteFingerprint, scanAndConnect, resetFingerprintMemory, disconnectDevice, sendBleCommand, stopBleScan, listFingerprints, monitorFingerprintEvents, fetchIdentity, saveIdentity, setMasterPass, enrollFingerprint, sendIntrusionAlertEmail } from "./src/ble";
 
 const STORAGE_KEY = "grip_mobile_app_state";
@@ -164,14 +165,18 @@ function MainApp() {
         if (event.fp_names) {
            try {
              const mapping = JSON.parse(event.fp_names);
+             const archivedStr = event.archived || "";
              if (Array.isArray(mapping) && mapping.length > 0) {
                const transformed: FingerprintData[] = mapping.map((m: any) => ({
                  id: m.s.toString(),
                  name: m.n,
                  slot: m.s,
-                 userId: '1'
+                 userId: '1',
+                 isArchived: archivedStr.includes(`,${m.s},`)
                }));
                setFingerprints(transformed);
+             } else {
+               setFingerprints([]);
              }
            } catch(e) {
              console.error("[SYNC] Identity Parse Error", e);
@@ -290,12 +295,18 @@ function MainApp() {
                   }
                 });
 
-                // Wait 1.5 seconds to ensure the BLE notification listener is fully registered on Android
                 setTimeout(async () => {
                   await listFingerprints(deviceId);
                   // Stagger requests to prevent BLE notification packet loss 
                   await new Promise(resolve => setTimeout(resolve, 500));
                   await fetchIdentity(deviceId);
+                  
+                  // Keep hardware clock constantly synced with real-world time for logs!
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                  sendBleCommand(deviceId, { 
+                    cmd: 'sync_settings', 
+                    time: Math.floor(Date.now() / 1000)
+                  });
                 }, 1500);
 
                 // Timeout safety: if ESP32 doesn't respond in 6s, we must default to a secure state
@@ -425,6 +436,13 @@ function MainApp() {
             deviceId={connectedDeviceId}
             onAddFingerprint={() => {}} // Now handled by Modal in Dashboard
             onRemoveFingerprint={() => {}}
+            onToggleArchive={(fp) => {
+              const copy = fingerprints.map(f => f.id === fp.id ? { ...f, isArchived: !f.isArchived } : f);
+              setFingerprints(copy);
+              if (connectedDeviceId) {
+                saveIdentity(connectedDeviceId, user.name, copy);
+              }
+            }}
             onResetHardware={() => {}}
             onSystemReset={() => {}}
             onEnrollWithPassword={(pass) => {
@@ -437,6 +455,15 @@ function MainApp() {
             onFullResetWithPassword={fullResetWithPass}
             onUpdateFingerprints={setFingerprints}
             onUpdateUser={setUser}
+            onNavigateToLogs={() => setScreen("accessLogs")}
+          />
+        )}
+
+        {screen === "accessLogs" && (
+          <AccessLogScreen
+            deviceId={connectedDeviceId}
+            fingerprints={fingerprints}
+            onBack={() => setScreen("dashboard")}
           />
         )}
       </View>

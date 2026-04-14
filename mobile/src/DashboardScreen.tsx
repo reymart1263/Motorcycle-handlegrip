@@ -10,6 +10,8 @@ type Props = {
   deviceId: string | null;
   onAddFingerprint: () => void;
   onRemoveFingerprint: (id: string, slot: number) => void;
+  onToggleArchive?: (fp: FingerprintData) => void;
+  onNavigateToLogs?: () => void;
   onResetHardware: () => void;
   onSystemReset: () => void;
   onUpdateFingerprints?: (fingerprints: FingerprintData[]) => void;
@@ -21,7 +23,7 @@ type Props = {
 };
 
 export function DashboardScreen({ 
-  user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onResetHardware, onSystemReset, 
+  user, fingerprints, deviceId, onAddFingerprint, onRemoveFingerprint, onToggleArchive, onNavigateToLogs, onResetHardware, onSystemReset, 
   onUpdateFingerprints, onUpdateUser,
   onEnrollWithPassword, onDeleteWithPassword, onResetWithPassword, onFullResetWithPassword
 }: Props) {
@@ -313,8 +315,15 @@ export function DashboardScreen({
       </Pressable>
 
       {/* Fingerprint Access */}
-      <View style={[styles.sectionHeader, { marginTop: 24 }]}>
+      <View style={[styles.sectionHeader, { marginTop: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
         <Text style={styles.sectionTitle}>Fingerprint Access</Text>
+        <Pressable 
+          onPress={onNavigateToLogs} 
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f4f4f5', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 }}
+        >
+          <Ionicons name="time-outline" size={14} color="#71717a" />
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#71717a' }}>History</Text>
+        </Pressable>
       </View>
       
       {fingerprints.map((fp, index) => (
@@ -323,11 +332,24 @@ export function DashboardScreen({
             <Ionicons name="person-outline" size={20} color="#a1a1aa" />
           </View>
           <View style={styles.userInfoText}>
-            <Text style={styles.userNameText}>{fp.name}</Text>
+            <Text style={[styles.userNameText, fp.isArchived && { color: '#a1a1aa', textDecorationLine: 'line-through' }]}>
+              {fp.name} {fp.isArchived ? '(Archived)' : ''}
+            </Text>
           </View>
-          <Pressable style={styles.fpEditIcon} onPress={() => confirmDelete(fp)}>
-            <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
-          </Pressable>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable 
+              style={[styles.fpEditIcon, { position: 'relative', right: 0 }]} 
+              onPress={() => onToggleArchive && onToggleArchive(fp)}
+            >
+              <MaterialCommunityIcons name={fp.isArchived ? "archive-check" : "archive-off-outline"} size={20} color="#f59e0b" />
+            </Pressable>
+            <Pressable 
+              style={[styles.fpEditIcon, { position: 'relative', right: 0 }]} 
+              onPress={() => confirmDelete(fp)}
+            >
+              <MaterialCommunityIcons name="trash-can-outline" size={20} color="#ef4444" />
+            </Pressable>
+          </View>
         </View>
       ))}
 
@@ -345,7 +367,7 @@ export function DashboardScreen({
           <Text style={styles.resetLink}>RESET FINGERPRINT MEMORY</Text>
         </Pressable>
         <Pressable onPress={() => setSecurityModal({ visible: true, type: 'reset' })}>
-          <Text style={styles.systemResetLink}>SYSTEM RESET (TESTING ONLY)</Text>
+          <Text style={styles.systemResetLink}>SYSTEM RESET</Text>
         </Pressable>
       </View>
 
