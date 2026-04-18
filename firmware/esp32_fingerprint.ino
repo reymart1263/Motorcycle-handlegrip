@@ -2,28 +2,19 @@
 //  Motorcycle Fingerprint Lock — with NEO-6M GPS (GPS6MV2)
 // =============================================================================
 //
-// ── GPS6MV2 WIRING ────────────────────────────────────────────────────────────
-//   VCC  → ESP32 3.3V   ✅ Use 3.3V, NOT 5V.
-//                          The GPS6MV2 has an onboard LDO regulator that
-//                          accepts 3.3V–5V, but because ESP32 UART pins are
-//                          3.3V logic, powering from 3.3V avoids any risk of
-//                          feeding 5V logic back into the ESP32 RX pin.
-//   GND  → ESP32 GND
-//   TX   → ESP32 GPIO34  (ESP32 RX — input only pin, safe choice)
-//   RX   → ESP32 GPIO12  (ESP32 TX → GPS RX)
+// ── PIEZO BUZZER WIRING ───────────────────────────────────────────────────────
+//   (+) Positive → ESP32 GPIO27   (or any available GPIO)
+//   (-) Negative → ESP32 GND
+//   ⚠️  Use a passive buzzer (not active). Active buzzers make their own tone
+//       and ignore frequency — passive ones require PWM so you can control pitch.
+//       If your buzzer has only 2 pins with no "+" marking, try both orientations.
 //
-// ── GPS BEHAVIOUR ─────────────────────────────────────────────────────────────
-//   On boot: Serial monitor shows "GPS initializing..." then either
-//             "[GPS] Ready — fix acquired" or "[GPS] Waiting for fix..."
-//             Updated every second while waiting.
-//   On INVALID fingerprint: reads current GPS data and prints
-//             latitude, longitude, speed, and satellites to Serial.
-//   On VALID  fingerprint: servo unlocks. GPS is NOT triggered.
-//
-// ── SG90 WIRING ───────────────────────────────────────────────────────────────
-//   Brown/Black  → ESP32 GND
-//   Red          → ESP32 VIN (5V)  ← must be 5V, not 3.3V
-//   Orange/Yellow→ ESP32 GPIO13
+// ── ZW101 LED BEHAVIOUR ──────────────────────────────────────────────────────
+//   On valid fingerprint  : solid green (1 second)
+//   On invalid fingerprint: single red blink
+//   During cooldown       : fast blue blink (continuous, until cooldown ends)
+//   The ZW101 LED is controlled via the Adafruit library's LEDcontrol() call.
+//   No extra wiring needed — it uses the same UART connection as fingerprint data.
 //
 // ── LIBRARY REQUIREMENTS ─────────────────────────────────────────────────────
 //   - ESP32Servo     (Library Manager: "ESP32Servo")
@@ -58,6 +49,7 @@
 #define GPS_TX_PIN      12    // GPS RX  → ESP32 GPIO12
 #define SERVO_PIN       13    // SG90 signal (orange/yellow)
 #define BOOT_BUTTON_PIN 0     // Built-in ESP32 BOOT button (Active-Low)
+#define BUZZER_PIN      27    // Passive piezo buzzer signal pin
 
 // ── Servo angles ──────────────────────────────────────────────────────────────
 #define SERVO_UNLOCKED  180   // Valid fingerprint   → clockwise   → unlocked
@@ -221,11 +213,14 @@ String urlEncode(String str) {
 //  HTTP / Email Alert Sender
 // =============================================================================
 void sendEmailAlert() {
+  tone(BUZZER_PIN, 500); // Start 500Hz tone immediately
+  finger.LEDcontrol(2, 50, 2, 0); // Fast blue blink (infinite count)
   if (storedEMAIL == "") {
-    Serial.println("[ALARM] No Target Email saved. Cannot send alert.");
-    return;
+    Serial.println("[ALARM] No Target Email saved. Skipping email alert.");
+    goto lockdown;
   }
   
+  { // Start of alert scope
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[ALARM] WiFi not connected. Connecting...");
     WiFi.mode(WIFI_STA);
@@ -240,8 +235,8 @@ void sendEmailAlert() {
     }
     Serial.println();
     if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("[ALARM] Could not connect to hotspot. Email alert aborted.");
-      return;
+      Serial.println("[ALARM] Could not connect to hotspot. Email alert skipped.");
+      goto lockdown;
     }
     // Give DNS and stack a moment to stabilize
     delay(2000); 
@@ -366,17 +361,30 @@ void sendEmailAlert() {
   } else {
     Serial.println("[ALARM] HTTP begin failed.");
   }
+  } // End of alert scope
+
+lockdown:
 
   // After sending alert, enforce a 30-second security cooldown
   Serial.println("==================================================");
-  Serial.println("[ALARM] INTRUDER LOCKDOWN ACTIVATED");
+  Serial.println("[ALARM] INTRUDER LOCKDOWN ACTIVATED — BUZZER ON");
   Serial.println("==================================================");
   
   for (int i = 30; i > 0; i--) {
     Serial.printf("[ALARM] System locked. Cooldown remaining: %d seconds...\n", i);
-    delay(1000); // delay automatically feeds the ESP32 Watchdog Timer
+    
+    // Steady 500Hz Pulsing Alarm
+    for (int j = 0; j < 2; j++) {
+      tone(BUZZER_PIN, 500);
+      finger.LEDcontrol(2, 25, 2, 1); // Blue Flash
+      delay(500);
+      noTone(BUZZER_PIN);
+      delay(500);
+    }
   }
 
+  noTone(BUZZER_PIN); // Stop the tone
+  finger.LEDcontrol(4, 0, 0, 0); // Turn off LED
   Serial.println("[ALARM] Cooldown finished! Rebooting system to restore normal functions...");
   ESP.restart();
 }
@@ -628,6 +636,8 @@ void setup() {
 
   // ── Hardware Buttons ────────────────────────────────────────────────────
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 
   // ── Load Preferences ────────────────────────────────────────────────────
   preferences.begin("grip-app", false);
@@ -776,6 +786,16 @@ void loop() {
   if (!gpsReady() && millis() - lastGpsStatusPrint > 10000) {
     Serial.print("[GPS] Still waiting for fix... Satellites seen: ");
     Serial.println(gps.satellites.isValid() ? gps.satellites.value() : 0);
+    
+    // NEW DIAGNOSTIC: Check if we are receiving any bytes at all
+    if (gps.charsProcessed() < 10) {
+      Serial.println("[GPS] WARNING: No data received from GPS module yet. Check your wiring (TX/RX)!");
+    } else {
+      Serial.print("[GPS] Data is flowing (Chars: ");
+      Serial.print(gps.charsProcessed());
+      Serial.println("). Wiring is OK, just needs a better view of the sky.");
+    }
+    
     lastGpsStatusPrint = millis();
   }
   if (gpsReady() && lastGpsStatusPrint != 0 &&
@@ -876,6 +896,7 @@ void loop() {
           consecutiveFails = 0; // Reset consecutive failures count
           
           // ── VALID — unlock servo, no GPS triggered ────────────────────────
+          finger.LEDcontrol(3, 100, 4, 0); // Solid Green (using color code 4 or 2 depending on sensor, usually 4 is green)
           Serial.print("[FP] Matched! ID: ");
           Serial.print(finger.fingerID);
           Serial.print("  Confidence: ");
@@ -894,6 +915,7 @@ void loop() {
         Serial.print("[FP] No match — access denied. Attempt: ");
         Serial.println(consecutiveFails);
 
+        finger.LEDcontrol(2, 25, 1, 1); // Single Red Blink
         lockServo.write(SERVO_LOCKED);     // always write — self-correcting
         logAccess(-1, 0); // Log failed attempt
         delay(500);
